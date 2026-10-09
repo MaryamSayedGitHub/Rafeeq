@@ -1,0 +1,17 @@
+{% if results %}
+<p class="t-muted">نتائج لسؤال: <strong dir="auto">{{ query }}</strong></p>
+<ul class="t-sessions">
+  {% for r in results %}
+  <li>
+    <div>
+      <strong dir="auto">{{ r.title }}</strong>
+      <span class="t-muted"> · تطابق {{ (r.score * 100) | round | int }}%</span>
+      <div class="t-muted t-small" dir="ltr">⏱ {{ r.open_at }}</div>
+    </div>
+    <p dir="auto">{{ r.text }}</p>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="t-muted">لا توجد نتائج مطابقة بعد. البحث يعمل على جلساتك المعتمدة فقط (بعد الموافقة على المسودة).</p>
+{% endif %}

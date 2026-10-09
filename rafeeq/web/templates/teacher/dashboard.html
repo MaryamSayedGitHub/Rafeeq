@@ -126,6 +126,23 @@
   {% endif %}
 </section>
 
+{# ------------------------------------------------- video discovery (Lab 4) #}
+<section class="t-card">
+  <h2>دوّر داخل جلساتك <span class="t-badge">تجريبي</span></h2>
+  <p class="t-muted">اكتب سؤال الطالب، والنظام يدلّك على الشريحة من جلساتك المعتمدة التي تشرحه بالضبط، مع توقيت تقديري.</p>
+  <form class="t-form" hx-post="/teacher/ui/videos/search" hx-target="#video-results" hx-swap="innerHTML"
+        hx-indicator="#video-working" hx-disabled-elt="find button">
+    <label class="t-grow">سؤال الطالب
+      <input name="q" required minlength="3" maxlength="300" dir="auto" placeholder="إزاي الدالة بترجع قيمة؟">
+    </label>
+    <div class="t-actions">
+      <button class="t-btn">ابحث</button>
+      <span id="video-working" class="htmx-indicator t-muted">جاري البحث…</span>
+    </div>
+  </form>
+  <div id="video-results" aria-live="polite"></div>
+</section>
+
 {# ------------------------------------------------------------- class #}
 <section class="t-card">
   <h2>الفصل <span class="t-badge">بيانات تجريبية</span></h2>

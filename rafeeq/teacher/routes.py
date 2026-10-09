@@ -33,6 +33,7 @@ from pydantic import BaseModel, ValidationError
 from rafeeq.samples import load_sample
 from rafeeq.teacher.lecturer.controller import RevisionLimitReached, SessionNotFound, SessionNotWaiting
 from rafeeq.teacher.lecturer.long_term_store import list_sessions, load_memory
+from rafeeq.teacher.lecturer import video_discovery
 from rafeeq.teacher.lecturer.schemas import ApproveRequest as Decision
 from rafeeq.teacher.lecturer.schemas import SessionRequest
 from rafeeq.teacher.lecturer.settings import MAX_REVISIONS, OUTPUT_DIR
@@ -144,6 +145,18 @@ def put_profile_api(svc: Service, body: TeacherProfileUpdate):
 @router.get("/teacher/sessions", response_model=TeacherSessions)
 def list_sessions_api(svc: Service, teacher_id: str = Query(min_length=1)):
     return {"sessions": _past_sessions(svc, teacher_id)}
+
+
+@router.get("/teacher/videos/search")
+def search_videos_api(
+    teacher_id: str = Query(min_length=1),
+    q: str = Query(min_length=2, max_length=300),
+    top_k: int = Query(5, ge=1, le=10),
+):
+    """Semantic search over this teacher's own approved sessions (Lab 4: video discovery).
+    Each hit is one slide's speaker notes, with an estimated timestamp a future video
+    player can jump to. Empty list (not an error) when Postgres/Gemini are unavailable."""
+    return {"results": video_discovery.search(teacher_id, q, top_k=top_k)}
 
 
 @router.post("/teacher/sessions")
@@ -313,6 +326,15 @@ def start_session_form(
         log.exception("teacher: generation failed")
         return _error(request, f"تعذّر تجهيز المسودة: {type(e).__name__}: {str(e)[:300]}")
     return _fragment(request, "teacher/_review.html", s=view)
+
+
+@router.post("/teacher/ui/videos/search", response_class=HTMLResponse)
+def search_videos_form(request: Request, svc: Service, q: str = Form(...)):
+    teacher_id = current_teacher_id(request)
+    if not teacher_id:
+        return _error(request, "احفظ ملفك الشخصي أولًا.")
+    results = video_discovery.search(teacher_id, q.strip(), top_k=5)
+    return _fragment(request, "teacher/_video_results.html", query=q.strip(), results=results)
 
 
 @router.post("/teacher/ui/sessions/{session_id}/decision", response_class=HTMLResponse)

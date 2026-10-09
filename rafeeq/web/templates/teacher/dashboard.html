@@ -126,10 +126,10 @@
   {% endif %}
 </section>
 
-{# ------------------------------------------------- video discovery (Lab 4) #}
+{# --------------------------------------------- video discovery (YouTube) #}
 <section class="t-card">
-  <h2>دوّر داخل جلساتك <span class="t-badge">تجريبي</span></h2>
-  <p class="t-muted">اكتب سؤال الطالب، والنظام يدلّك على الشريحة من جلساتك المعتمدة التي تشرحه بالضبط، مع توقيت تقديري.</p>
+  <h2>دوّر عن شرح بالفيديو <span class="t-badge">تجريبي</span></h2>
+  <p class="t-muted">اكتب سؤال الطالب، والنظام يدوّر في فيديوهات يوتيوب ويفتح الفيديو من اللحظة اللي بتشرح الإجابة بالظبط.</p>
   <form class="t-form" hx-post="/teacher/ui/videos/search" hx-target="#video-results" hx-swap="innerHTML"
         hx-indicator="#video-working" hx-disabled-elt="find button">
     <label class="t-grow">سؤال الطالب

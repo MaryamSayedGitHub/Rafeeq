@@ -33,7 +33,7 @@ from pydantic import BaseModel, ValidationError
 from rafeeq.samples import load_sample
 from rafeeq.teacher.lecturer.controller import RevisionLimitReached, SessionNotFound, SessionNotWaiting
 from rafeeq.teacher.lecturer.long_term_store import list_sessions, load_memory
-from rafeeq.teacher.lecturer import video_discovery
+from rafeeq.teacher.lecturer import video_discovery, youtube_discovery
 from rafeeq.teacher.lecturer.schemas import ApproveRequest as Decision
 from rafeeq.teacher.lecturer.schemas import SessionRequest
 from rafeeq.teacher.lecturer.settings import MAX_REVISIONS, OUTPUT_DIR
@@ -46,6 +46,9 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["M5 teacher"])
 templates = Jinja2Templates(directory=Path(__file__).resolve().parent.parent / "web" / "templates")
 templates.env.globals["LEVEL_AR"] = LEVEL_AR
+# Embeds the YouTube results as JSON for the player's <script> (escapes "</" so a
+# transcript chunk can never accidentally close the surrounding <script> tag).
+templates.env.filters["tojson"] = lambda obj: __import__("json").dumps(obj, ensure_ascii=False).replace("</", "<\\/")
 
 COOKIE = "rafeeq_teacher"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 180
@@ -149,14 +152,13 @@ def list_sessions_api(svc: Service, teacher_id: str = Query(min_length=1)):
 
 @router.get("/teacher/videos/search")
 def search_videos_api(
-    teacher_id: str = Query(min_length=1),
     q: str = Query(min_length=2, max_length=300),
     top_k: int = Query(5, ge=1, le=10),
 ):
-    """Semantic search over this teacher's own approved sessions (Lab 4: video discovery).
-    Each hit is one slide's speaker notes, with an estimated timestamp a future video
-    player can jump to. Empty list (not an error) when Postgres/Gemini are unavailable."""
-    return {"results": video_discovery.search(teacher_id, q, top_k=top_k)}
+    """Real YouTube videos, found and ranked by meaning, opening at the exact timestamp
+    that answers the question (Madrasa-spec Feature 2). Empty list (not an error) when
+    YOUTUBE_API_KEY/Postgres/Gemini are unavailable."""
+    return {"results": youtube_discovery.search(q, top_k=top_k)}
 
 
 @router.post("/teacher/sessions")
@@ -330,10 +332,9 @@ def start_session_form(
 
 @router.post("/teacher/ui/videos/search", response_class=HTMLResponse)
 def search_videos_form(request: Request, svc: Service, q: str = Form(...)):
-    teacher_id = current_teacher_id(request)
-    if not teacher_id:
+    if not current_teacher_id(request):
         return _error(request, "احفظ ملفك الشخصي أولًا.")
-    results = video_discovery.search(teacher_id, q.strip(), top_k=5)
+    results = youtube_discovery.search(q.strip(), top_k=5)
     return _fragment(request, "teacher/_video_results.html", query=q.strip(), results=results)
 
 

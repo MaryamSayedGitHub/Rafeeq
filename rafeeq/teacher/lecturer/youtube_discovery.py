@@ -8,8 +8,9 @@ video_discovery.py is left in place (final_agent still indexes sessions
 quietly) in case a "my own recordings" mode is wanted again later.
 
 Pipeline for one search:
-  1. YouTube Data API `search.list` -> a handful of candidate videos
-     (restricted to ones that have captions, so step 2 can succeed).
+  1. youtube-search-python reads YouTube's own search page -> a handful of
+     candidate videos (no API key or Google Cloud billing account needed;
+     some candidates won't have a transcript, step 2 just skips them).
   2. For each NEW candidate (not already cached), fetch its transcript with
      youtube-transcript-api and chunk it into ~45-second windows.
   3. Embed each chunk (Gemini) and store it in Postgres/pgvector, cached by
@@ -24,11 +25,8 @@ one failing video/provider never breaks the whole search -- it is just
 skipped, consistent with video_discovery.py's "never raises" contract.
 """
 
-import json
 import logging
 import os
-import urllib.parse
-import urllib.request
 
 from rafeeq.teacher.lecturer.settings import DATABASE_URL
 
@@ -37,51 +35,37 @@ log = logging.getLogger(__name__)
 EMBED_MODEL = "gemini-embedding-001"
 EMBED_DIM = 768
 CHUNK_SECONDS = 45          # group consecutive captions into ~45s segments
-MAX_CANDIDATES = 6          # videos pulled per search (keeps YouTube quota small)
-YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
+MAX_CANDIDATES = 8          # a few extra than we need: some won't have a transcript
 
 
 # ---------------------------------------------------------------------------
-# Step 1 — YouTube Data API: find candidate videos
+# Step 1 — find candidate videos (no API key / no Google Cloud billing needed)
 # ---------------------------------------------------------------------------
 def search_candidates(query: str, max_results: int = MAX_CANDIDATES) -> list[dict]:
-    """[] (not an exception) when YOUTUBE_API_KEY is missing or the API call
-    fails -- the dashboard then just shows "no results" instead of crashing."""
-    api_key = os.getenv("YOUTUBE_API_KEY")
-    if not api_key:
-        log.warning("youtube_discovery: YOUTUBE_API_KEY is not set in .env")
-        return []
-
-    params = {
-        "part": "snippet",
-        "type": "video",
-        "q": query,
-        "maxResults": max_results,
-        "videoCaption": "closedCaption",  # only videos that actually have captions
-        "safeSearch": "strict",
-        "relevanceLanguage": "ar",
-        "key": api_key,
-    }
-    url = f"{YOUTUBE_SEARCH_URL}?{urllib.parse.urlencode(params)}"
+    """Uses youtube-search-python: it reads YouTube's own search results page,
+    the same way a browser would -- no API key, no Google Cloud project, no
+    billing account. [] (not an exception) if the search fails (network issue,
+    or YouTube changing its page layout breaking the parser)."""
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            data = json.load(resp)
+        from youtubesearchpython import VideosSearch
+
+        search = VideosSearch(query, limit=max_results, language="ar", region="EG")
+        items = search.result().get("result", [])
     except Exception as e:
-        log.warning("youtube_discovery: search.list failed: %s: %s", type(e).__name__, str(e)[:300])
+        log.warning("youtube_discovery: search failed: %s: %s", type(e).__name__, str(e)[:300])
         return []
 
     candidates = []
-    for item in data.get("items", []):
-        vid = item.get("id", {}).get("videoId")
-        snippet = item.get("snippet", {})
-        if not vid:
+    for item in items:
+        video_id = item.get("id")
+        if not video_id:
             continue
+        thumbnails = item.get("thumbnails") or []
         candidates.append({
-            "video_id": vid,
-            "title": snippet.get("title", ""),
-            "channel": snippet.get("channelTitle", ""),
-            "thumbnail": (snippet.get("thumbnails", {}).get("medium")
-                          or snippet.get("thumbnails", {}).get("default") or {}).get("url", ""),
+            "video_id": video_id,
+            "title": item.get("title", ""),
+            "channel": (item.get("channel") or {}).get("name", ""),
+            "thumbnail": thumbnails[-1]["url"] if thumbnails else "",
         })
     return candidates
 

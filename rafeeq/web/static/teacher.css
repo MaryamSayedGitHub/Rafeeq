@@ -112,3 +112,6 @@
 /* video generation (Lab 5) */
 .t-ok-box { border-color: var(--t-green); background: #f3fbf6; }
 video.yt-player { display: block; margin-block: .5rem; background: #000; }
+
+/* teacher avatar (Lab 5 persona) */
+.t-avatar-preview { display: block; inline-size: 96px; block-size: 96px; object-fit: cover; border-radius: 10px; margin-block: .4rem; border: 1px solid var(--line); }

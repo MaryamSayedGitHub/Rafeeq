@@ -138,12 +138,13 @@
                 placeholder="نبات يمتص الماء من التربة ويبدأ البناء الضوئي في أوراقه، أنيميشن تعليمي بسيط"></textarea>
     </label>
     <div class="t-row">
-      <label>صورة (اختياري)
+      <label>صورة (اختياري{{ " — غير موجودة صورة لشخصيتك، هيتولّد نص→فيديو بدونها" if not profile.avatar_filename else "، لو سبتها فاضية هيستخدم صورة شخصيتك المحفوظة" }})
         <input type="file" name="image" accept="image/png,image/jpeg,image/webp">
       </label>
       <label>المدة (ثانية)
         <input name="duration" type="number" min="2" max="6" value="5" class="t-num">
       </label>
+      <label><input type="checkbox" name="audio" value="true"> صوت (تكلفة أعلى تقريبًا الضعف)</label>
     </div>
     <div class="t-actions">
       <button class="t-btn">ولّد الفيديو</button>

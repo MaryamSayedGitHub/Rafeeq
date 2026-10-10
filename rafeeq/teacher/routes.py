@@ -36,8 +36,8 @@ from rafeeq.teacher.lecturer.long_term_store import list_sessions, load_memory
 from rafeeq.teacher.lecturer import video_discovery, video_gen, youtube_discovery
 from rafeeq.teacher.lecturer.schemas import ApproveRequest as Decision
 from rafeeq.teacher.lecturer.schemas import SessionRequest
-from rafeeq.teacher.lecturer.settings import MAX_REVISIONS, OUTPUT_DIR
-from rafeeq.teacher.profile import LEVEL_AR, TeacherProfile, TeacherProfileUpdate, load_profile, save_profile
+from rafeeq.teacher.lecturer.settings import AVATAR_DIR, MAX_REVISIONS, OUTPUT_DIR
+from rafeeq.teacher.profile import LEVEL_AR, TeacherProfile, TeacherProfileUpdate, load_profile, make_teacher_id, save_avatar, save_profile
 from rafeeq.teacher.service import AssistantNotConfigured, TeacherService
 from rafeeq.web.nav import NAV
 
@@ -258,7 +258,7 @@ def edit_profile(request: Request, svc: Service):
 
 
 @router.post("/teacher/ui/profile")
-def save_profile_form(
+async def save_profile_form(
     request: Request,
     svc: Service,
     name: str = Form(...),
@@ -269,11 +269,19 @@ def save_profile_form(
     student_level: str = Form("intermediate"),
     programming_language: str = Form("Python"),
     duration_minutes: int = Form(60),
+    avatar: UploadFile | None = File(None),
 ):
+    teacher_id = current_teacher_id(request)
+    existing = _profile(svc, teacher_id) if teacher_id else None
+    avatar_filename = existing.avatar_filename if existing else ""
+    if avatar is not None and avatar.filename:
+        avatar_filename = save_avatar(teacher_id or make_teacher_id(name), await avatar.read(), avatar.filename)
+
     try:
         update = TeacherProfileUpdate(
-            teacher_id=current_teacher_id(request),
+            teacher_id=teacher_id,
             name=name, title=title, subjects=subjects, bio=bio,
+            avatar_filename=avatar_filename,
             defaults={"language": language, "student_level": student_level,
                       "programming_language": programming_language,
                       "duration_minutes": duration_minutes},
@@ -285,6 +293,14 @@ def save_profile_form(
     response = RedirectResponse("/teacher", status_code=303)
     remember_teacher(response, teacher_id, max_age=COOKIE_MAX_AGE, httponly=True, samesite="lax")
     return response
+
+
+@router.get("/teacher/avatar/{teacher_id}")
+def teacher_avatar(teacher_id: str):
+    filename = next((p.name for p in AVATAR_DIR.glob(f"{teacher_id}.*")), None)
+    if not filename:
+        raise HTTPException(404, "No avatar saved for this teacher")
+    return FileResponse(AVATAR_DIR / filename)
 
 
 @router.post("/teacher/ui/sessions", response_class=HTMLResponse)
@@ -344,8 +360,10 @@ async def generate_video_form(
     prompt: str = Form(...),
     image: UploadFile | None = File(None),
     duration: int = Form(5),
+    audio: bool = Form(False),
 ):
-    if not current_teacher_id(request):
+    teacher_id = current_teacher_id(request)
+    if not teacher_id:
         return _error(request, "احفظ ملفك الشخصي أولًا.")
 
     image_bytes, image_filename = None, "image.jpg"
@@ -354,8 +372,16 @@ async def generate_video_form(
         image_filename = image.filename
         if len(image_bytes) > 8 * 1024 * 1024:  # 8MB: keep the request body reasonable
             return _error(request, "الصورة كبيرة جدًا (الحد الأقصى 8MB).")
+    else:
+        # No image uploaded for this specific video: fall back to the teacher's
+        # saved character/avatar image (if any), so the same "presenter" shows
+        # up across videos without re-uploading every time.
+        avatar_file = next(iter(AVATAR_DIR.glob(f"{teacher_id}.*")), None)
+        if avatar_file is not None:
+            image_bytes = avatar_file.read_bytes()
+            image_filename = avatar_file.name
 
-    result = video_gen.submit_task(prompt.strip(), image_bytes, image_filename, duration=duration)
+    result = video_gen.submit_task(prompt.strip(), image_bytes, image_filename, duration=duration, audio=audio)
     if not result["ok"]:
         return _error(request, f"تعذّر بدء توليد الفيديو: {result['error']}")
     return _fragment(request, "teacher/_video_gen_status.html",

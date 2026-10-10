@@ -14,6 +14,11 @@ load_dotenv(REPO_ROOT / ".env")
 OUTPUT_DIR = Path(os.getenv("TEACHER_OUTPUT_DIR", REPO_ROOT / "outputs" / "teacher")).resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# A teacher's saved character image (Lab 5): used as the default first frame for
+# image-to-video generation so their videos keep the same "presenter" each time.
+AVATAR_DIR = Path(os.getenv("TEACHER_AVATAR_DIR", REPO_ROOT / "outputs" / "avatars")).resolve()
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+
 # LLM
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

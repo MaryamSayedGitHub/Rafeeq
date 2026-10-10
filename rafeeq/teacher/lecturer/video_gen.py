@@ -84,15 +84,21 @@ def submit_task(
     image_filename: str = "image.jpg",
     duration: int = 5,
     resolution: str = "720P",
+    audio: bool = False,
 ) -> dict:
-    """Returns {"ok": True, "task_id": ...} or {"ok": False, "error": "..."}."""
+    """Returns {"ok": True, "task_id": ...} or {"ok": False, "error": "..."}.
+
+    `audio` turns on the model's own generated sound/voice track (costs roughly
+    2x more per second than silent -- see QwenCloud's pricing page). Defaults
+    to False so a first try doesn't surprise anyone with the bill."""
     if not _api_key():
         return {"ok": False, "error": "DASHSCOPE_API_KEY is not set in .env"}
 
     duration = max(2, min(duration, MAX_DURATION_SECONDS))
     body: dict = {
         "input": {"prompt": prompt.strip()[:800]},
-        "parameters": {"resolution": resolution, "duration": duration, "prompt_extend": True},
+        "parameters": {"resolution": resolution, "duration": duration,
+                       "prompt_extend": True, "audio": audio},
     }
 
     if image_bytes:
@@ -105,7 +111,6 @@ def submit_task(
         else:
             # wan2.6 and earlier: the image goes directly in input.img_url
             body["input"]["img_url"] = image_uri
-        body["parameters"]["audio"] = False  # keep the cost down (flash model generates audio by default)
     else:
         body["model"] = DEFAULT_T2V_MODEL
 

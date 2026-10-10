@@ -9,11 +9,13 @@ kept in a cookie. When login lands, teacher_id becomes the logged-in user's id.
 """
 
 import re
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from rafeeq.teacher.lecturer.long_term_store import get_defaults, get_profile, list_sessions, put_profile
+from rafeeq.teacher.lecturer.settings import AVATAR_DIR
 
 Level = Literal["beginner", "intermediate", "advanced"]
 
@@ -41,6 +43,7 @@ class TeacherProfileUpdate(BaseModel):
     title: str = Field(default="", max_length=40)        # e.g. "د." or "م."
     subjects: list[str] = Field(default_factory=list)
     bio: str = Field(default="", max_length=600)
+    avatar_filename: str = Field(default="", max_length=120)  # saved under settings.AVATAR_DIR
     defaults: TeacherDefaults = Field(default_factory=TeacherDefaults)
 
     @field_validator("subjects", mode="before")
@@ -63,6 +66,21 @@ class TeacherProfile(TeacherProfileUpdate):
 
 def display_name(title: str, name: str) -> str:
     return f"{title.strip()} {name.strip()}".strip()
+
+
+def save_avatar(teacher_id: str, data: bytes, original_filename: str) -> str:
+    """Saves a teacher's character image under settings.AVATAR_DIR as
+    <teacher_id>.<ext>, replacing any previous one. Returns the saved filename,
+    which is what Lab 5's video generation reuses as the default first-frame
+    image when the teacher doesn't upload a different one for that request."""
+    ext = Path(original_filename).suffix.lower() or ".jpg"
+    if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+        ext = ".jpg"
+    for old_file in AVATAR_DIR.glob(f"{teacher_id}.*"):
+        old_file.unlink(missing_ok=True)
+    path = AVATAR_DIR / f"{teacher_id}{ext}"
+    path.write_bytes(data)
+    return path.name
 
 
 def load_profile(store, teacher_id: str, memory_lines: list[str] | None = None) -> TeacherProfile | None:

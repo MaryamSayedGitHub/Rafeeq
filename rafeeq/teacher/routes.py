@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote, unquote
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ValidationError
@@ -33,7 +33,7 @@ from pydantic import BaseModel, ValidationError
 from rafeeq.samples import load_sample
 from rafeeq.teacher.lecturer.controller import RevisionLimitReached, SessionNotFound, SessionNotWaiting
 from rafeeq.teacher.lecturer.long_term_store import list_sessions, load_memory
-from rafeeq.teacher.lecturer import video_discovery, youtube_discovery
+from rafeeq.teacher.lecturer import video_discovery, video_gen, youtube_discovery
 from rafeeq.teacher.lecturer.schemas import ApproveRequest as Decision
 from rafeeq.teacher.lecturer.schemas import SessionRequest
 from rafeeq.teacher.lecturer.settings import MAX_REVISIONS, OUTPUT_DIR
@@ -336,6 +336,37 @@ def search_videos_form(request: Request, svc: Service, q: str = Form(...)):
         return _error(request, "احفظ ملفك الشخصي أولًا.")
     results = youtube_discovery.search(q.strip(), top_k=5)
     return _fragment(request, "teacher/_video_results.html", query=q.strip(), results=results)
+
+
+@router.post("/teacher/ui/videos/generate", response_class=HTMLResponse)
+async def generate_video_form(
+    request: Request,
+    prompt: str = Form(...),
+    image: UploadFile | None = File(None),
+    duration: int = Form(5),
+):
+    if not current_teacher_id(request):
+        return _error(request, "احفظ ملفك الشخصي أولًا.")
+
+    image_bytes, image_filename = None, "image.jpg"
+    if image is not None and image.filename:
+        image_bytes = await image.read()
+        image_filename = image.filename
+        if len(image_bytes) > 8 * 1024 * 1024:  # 8MB: keep the request body reasonable
+            return _error(request, "الصورة كبيرة جدًا (الحد الأقصى 8MB).")
+
+    result = video_gen.submit_task(prompt.strip(), image_bytes, image_filename, duration=duration)
+    if not result["ok"]:
+        return _error(request, f"تعذّر بدء توليد الفيديو: {result['error']}")
+    return _fragment(request, "teacher/_video_gen_status.html",
+                     task_id=result["task_id"], model=result["model"], prompt=prompt.strip())
+
+
+@router.get("/teacher/ui/videos/generate/{task_id}", response_class=HTMLResponse)
+def generate_video_status(request: Request, task_id: str, prompt: str = Query("")):
+    result = video_gen.poll_task(task_id)
+    return _fragment(request, "teacher/_video_gen_status.html",
+                     task_id=task_id, prompt=prompt, poll_result=result)
 
 
 @router.post("/teacher/ui/sessions/{session_id}/decision", response_class=HTMLResponse)

@@ -108,3 +108,7 @@
 .yt-result:hover { background: #fbfcff; }
 .yt-result.yt-active { background: #eef1fb; border-radius: 10px; }
 .yt-thumb { inline-size: 120px; block-size: 68px; object-fit: cover; border-radius: 8px; flex: none; }
+
+/* video generation (Lab 5) */
+.t-ok-box { border-color: var(--t-green); background: #f3fbf6; }
+video.yt-player { display: block; margin-block: .5rem; background: #000; }

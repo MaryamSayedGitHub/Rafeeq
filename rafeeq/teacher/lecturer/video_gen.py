@@ -96,8 +96,15 @@ def submit_task(
     }
 
     if image_bytes:
-        body["model"] = DEFAULT_I2V_MODEL
-        body["input"]["media"] = [{"type": "first_frame", "url": _image_to_data_uri(image_bytes, image_filename)}]
+        model = DEFAULT_I2V_MODEL
+        body["model"] = model
+        image_uri = _image_to_data_uri(image_bytes, image_filename)
+        if model.startswith("wan2.7"):
+            # wan2.7+: the image goes in input.media as a list of {type, url}
+            body["input"]["media"] = [{"type": "first_frame", "url": image_uri}]
+        else:
+            # wan2.6 and earlier: the image goes directly in input.img_url
+            body["input"]["img_url"] = image_uri
         body["parameters"]["audio"] = False  # keep the cost down (flash model generates audio by default)
     else:
         body["model"] = DEFAULT_T2V_MODEL

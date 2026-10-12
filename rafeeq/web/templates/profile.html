@@ -64,6 +64,21 @@
     <button class="btn btn-primary" type="submit">{{ t('profile.save') }}</button>
   </form>
 
+  <div class="stack">
+  <section class="panel panel-pad" aria-labelledby="avatar-title">
+    <h2 class="panel-title" id="avatar-title">{{ t('profile.avatar') }}</h2>
+    <p class="muted small">{{ t('profile.avatar_help') }}</p>
+    {% if p.get('avatar_filename') %}
+      <img class="avatar-preview" src="{{ u('/profile/avatar') }}" alt="{{ t('profile.avatar') }}">
+    {% else %}
+      <p class="muted">{{ t('profile.avatar_none') }}</p>
+    {% endif %}
+    <form class="form-stack" method="post" action="{{ u('/profile/avatar') }}" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}">
+      <input class="input" type="file" name="image" accept="image/png,image/jpeg,image/webp" required aria-label="{{ t('profile.avatar') }}">
+      <button class="btn btn-secondary" type="submit">{{ icon('image', 18) }}<span>{{ t('profile.avatar_upload') }}</span></button>
+    </form>
+  </section>
   <aside class="panel panel-pad">
     <h2 class="panel-title">{{ t('profile.remembered') }}</h2>
     {% if p.get('sessions_count') is not none %}<p class="muted small">{{ t('profile.sessions_count', n=p.sessions_count) }}</p>{% endif %}
@@ -73,6 +88,7 @@
       <p class="muted">{{ t('profile.remembered.empty') }}</p>
     {% endif %}
   </aside>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

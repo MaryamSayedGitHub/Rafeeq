@@ -190,18 +190,36 @@ token yet (P10).
 
 ## 8. Teacher features merged from the `maryam-sayed` branch (M5)
 
-Brought into this version, unchanged unless noted. They live on the teacher dashboard at `/teacher` (not under `/app`), because they use routes that are not in `contracts/openapi.yaml`:
+Merged with a real `git merge` (her commits keep their history). Only `pyproject.toml` and `uv.lock` conflicted.
 
-| Feature | Where | Needs |
+### Real class reports (no more sample data)
+
+`GET /teacher/rooms/{room_id}/report` and `/insights` (already shown on `/app` Overview, Students and Class insights) are now computed by `rafeeq/teacher/class_report.py`:
+
+| Input | Recorded by | Used for |
 |---|---|---|
-| Video discovery with timestamps (Lab 4): each approved lesson's slide notes are indexed so a question can open the video at the right moment | `rafeeq/teacher/lecturer/video_discovery.py`, `labs/lab4_video_discovery/`, hook in `nodes/final_agent.py` | Postgres + `GOOGLE_API_KEY`; never blocks a session if missing |
-| Real YouTube search + transcript jump | `lecturer/youtube_discovery.py`, `GET /teacher/videos/search`, "دوّر عن شرح بالفيديو" on the dashboard | no key; `youtube-search-python`, `youtube-transcript-api` |
-| Animated video generation (Lab 5) with a saved presenter image | `lecturer/video_gen.py`, `POST /teacher/ui/videos/generate`, avatar upload on the profile form | `DASHSCOPE_API_KEY` (paid) |
-| Text to speech (Lab 1) | `labs/lab1_tts/` | `edge-tts` / `elevenlabs` |
-| Fail-fast Postgres pool | `lecturer/memory.py` | none |
+| Every student copilot message (text, time) | `rafeeq/platform/router.py` `copilot_message` (one added line) | Insights: questions grouped by topic, with an example |
+| Quiz results (`question`, `chosen`, `correct` per answer) | **M4:** call `class_report.record_quiz_result(room_id, user_id, topic_id, answers)` inside `POST /quiz/{quiz_id}/submit` | Report: mastery per topic, students at risk; Insights: repeated mistakes; Students: each student's mastery and status |
 
-`/app` Lesson studio now has a "Video tools" panel that links to `/teacher`. The two UIs keep separate sign-ins: `/teacher` identifies the teacher by its own profile cookie.
+- Stored in the teacher service's LangGraph store (Postgres when `DATABASE_URL` works) under `("class", room_id, ...)`. Last 30 days count.
+- Topics: M2's `/rooms/{room_id}/topics` is not implemented, so a topic id is the topic name. Questions without a topic are grouped once (LLM, with the lecturer's session topics for that room as candidates; word overlap without an LLM).
+- Mastery is a stand-in until M4's learner profile exists (recent quizzes weigh more; ≥ 0.7 on track, ≥ 0.5 watch, else struggling). When M4 lands, read mastery from M4 and keep the rest.
+- `GET /rooms/{room_id}/students` now fills `mastery`/`status` from those results (still `null` without data).
+- Demo data: `uv run python -m rafeeq.teacher.seed_class_demo <room_id> [--add-students 4] [--clear]` (needs Postgres).
 
-Merged with a real `git merge` (her commits keep their history). Only `pyproject.toml` and `uv.lock` conflicted; `contracts/openapi.yaml` gained one optional field, `avatar_filename`, on `TeacherProfileUpdate` and `TeacherProfile`.
+### Video tools inside the `/app` Lesson studio
+
+| Feature | `/app` page | M5 API |
+|---|---|---|
+| YouTube videos that open at the second answering a question, Previous / Next | Studio panel "ابحث عن شرح بالفيديو" | `GET /teacher/videos/search` (no key) |
+| Animated video from a description or image (paid, QwenCloud Wan) | Studio panel "ولّد فيديو متحركًا" (polls every 5 s) | `POST /teacher/videos/generate`, `GET /teacher/videos/generate/{task_id}` (`DASHSCOPE_API_KEY`) |
+| Presenter image used as the first frame when no image is uploaded | Profile page | `POST /teacher/avatar`, `GET /teacher/avatar/{teacher_id}` |
+
+All are in `contracts/openapi.yaml` with samples. `TeacherProfile` gained the optional `avatar_filename`.
+
+### Also from her branch
+
+Video discovery over approved lessons' slide notes (Lab 4, `lecturer/video_discovery.py`), text to speech lab (`labs/lab1_tts/`), fail-fast Postgres pool (`lecturer/memory.py`). The older `/teacher` dashboard still works.
+
 New environment variables: see `.env.example` (`DASHSCOPE_API_KEY`, `QWEN_BASE_URL`, `WAN_T2V_MODEL`, `WAN_I2V_MODEL`).
 Also fixed: `.gitignore` had been saved as UTF-16 so `storage/` was never ignored, and `storage/platform/platform.json` (demo accounts and tokens) had been committed. It is no longer tracked.

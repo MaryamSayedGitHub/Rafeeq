@@ -48,6 +48,10 @@ SAMPLE_TO_SCHEMA = {
     "lecturer_session_request": "LecturerSessionRequest",
     "lecturer_decision": "LecturerDecision",
     "lecturer_session": "LecturerSession",
+    "video_search": "VideoSearch",
+    "video_job": "VideoJob",
+    "video_job_status": "VideoJobStatus",
+    "avatar_saved": "AvatarSaved",
 }
 
 

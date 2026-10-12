@@ -61,8 +61,13 @@ def _routes() -> list:
         R(room + "/studio/sessions/{session_id}", teacher.session_page, methods=["GET"]),
         R(room + "/studio/sessions/{session_id}/decision", teacher.session_decision, methods=["POST"]),
         R(room + "/studio/sessions/{session_id}/files/{name:path}", teacher.session_file, methods=["GET"]),
+        R(room + "/studio/videos/search", teacher.studio_video_search, methods=["POST"]),
+        R(room + "/studio/videos/generate", teacher.studio_video_generate, methods=["POST"]),
+        R(room + "/studio/videos/generate/{task_id}", teacher.studio_video_status, methods=["GET"]),
         R("/profile", teacher.profile_page, methods=["GET"]),
         R("/profile", teacher.profile_save, methods=["POST"]),
+        R("/profile/avatar", teacher.profile_avatar, methods=["GET"]),
+        R("/profile/avatar", teacher.profile_avatar_save, methods=["POST"]),
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
 

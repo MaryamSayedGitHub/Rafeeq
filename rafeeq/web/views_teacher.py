@@ -270,6 +270,80 @@ async def session_file(request: Request):
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe, safe='')}"})
 
 
+# ---------------------------------------------------------------- studio video tools (M5)
+# YouTube search that opens at the right second, and animated video generation (QwenCloud
+# Wan models, paid). The work happens in M5's API (rafeeq/teacher/routes.py); these views
+# only validate the form and render the result.
+
+IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _image_too_large(request: Request) -> bool:
+    try:
+        return int(request.headers.get("content-length", "0")) > MAX_IMAGE_BYTES + 1024 * 1024
+    except ValueError:
+        return False
+
+
+async def _image_part(upload) -> tuple | None | bool:
+    """None = no image chosen, False = not acceptable, else an httpx file tuple."""
+    if upload is None or not getattr(upload, "filename", ""):
+        return None
+    if (upload.content_type or "") not in IMAGE_TYPES:
+        return False
+    data = await upload.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        return False
+    return (upload.filename, data, upload.content_type)
+
+
+async def studio_video_search(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    form = await check_csrf(request)
+    q = str(form.get("q", "")).strip()
+    if len(q) < 3:
+        return notice(request, tr(request, "video.need_question"), "warning")
+    res = await api(request).get("/teacher/videos/search", token=user["token"],
+                                 params={"q": q[:300], "top_k": 5}, timeout=180)
+    ensure_session(request, res)
+    if not res.ok:
+        return notice(request, api_message(request, res), "warning")
+    return render(request, "partials/video_results.html", query=q, results=res.data.get("results", []))
+
+
+async def studio_video_generate(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    if _image_too_large(request):
+        return notice(request, tr(request, "video.bad_image"), "warning")
+    form = await check_csrf(request)
+    prompt = str(form.get("prompt", "")).strip()
+    if len(prompt) < 5:
+        return notice(request, tr(request, "video.need_prompt"), "warning")
+    image = await _image_part(form.get("image"))
+    if image is False:
+        return notice(request, tr(request, "video.bad_image"), "warning")
+    data = {"teacher_id": user["user_id"], "prompt": prompt[:800],
+            "duration": str(_int(form.get("duration"), 2, 6, 5)), "audio": "true" if form.get("audio") else "false"}
+    res = await api(request).post("/teacher/videos/generate", token=user["token"], data=data,
+                                  files={"image": image} if image else None, timeout=60)
+    ensure_session(request, res)
+    if not res.ok:
+        return notice(request, tr(request, "video.no_key") if res.status == 503 else api_message(request, res), "warning")
+    return render(request, "partials/video_job.html", room=room, task_id=res.data["task_id"], job=None,
+                  used_avatar=res.data.get("used_avatar", False), prompt=prompt)
+
+
+async def studio_video_status(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    task_id = request.path_params["task_id"]
+    res = await api(request).get(f"/teacher/videos/generate/{quote(task_id, safe='')}", token=user["token"], timeout=30)
+    ensure_session(request, res)
+    job = res.data if res.ok else {"status": "ERROR", "video_url": None, "error": api_message(request, res)}
+    return render(request, "partials/video_job.html", room=room, task_id=task_id, job=job,
+                  used_avatar=False, prompt=request.query_params.get("prompt", "")[:800])
+
+
 # ---------------------------------------------------------------- profile
 
 async def profile_page(request: Request):
@@ -300,3 +374,31 @@ async def profile_save(request: Request):
     ensure_session(request, res)
     flash(request, "success" if res.ok else "error", tr(request, "profile.saved") if res.ok else api_message(request, res))
     return redirect(request, "/profile")
+
+
+async def profile_avatar_save(request: Request):
+    """The presenter image used as the first frame of the teacher's animated videos."""
+    user = require_user(request, "teacher")
+    if _image_too_large(request):
+        flash(request, "warning", tr(request, "video.bad_image"))
+        return redirect(request, "/profile")
+    form = await check_csrf(request)
+    image = await _image_part(form.get("image"))
+    if not image:
+        flash(request, "warning", tr(request, "video.bad_image"))
+        return redirect(request, "/profile")
+    res = await api(request).post("/teacher/avatar", token=user["token"], data={"teacher_id": user["user_id"]},
+                                  files={"image": image}, timeout=60)
+    ensure_session(request, res)
+    flash(request, "success" if res.ok else "error",
+          tr(request, "profile.avatar_saved") if res.ok else api_message(request, res))
+    return redirect(request, "/profile")
+
+
+async def profile_avatar(request: Request):
+    user = require_user(request, "teacher")
+    res = await api(request).get(f"/teacher/avatar/{quote(user['user_id'], safe='')}", token=user["token"])
+    if not res.ok:
+        raise HTTPException(status_code=404, detail="avatar")
+    return Response(res.content, media_type=res.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "no-store"})

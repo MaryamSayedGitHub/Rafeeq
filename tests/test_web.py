@@ -336,11 +336,51 @@ def test_studio_generate_review_approve_download(env):
     assert f.content == b"PPTX-BYTES" and "attachment" in f.headers["content-disposition"]
 
 
-def test_studio_links_to_the_teacher_video_tools(env):
-    app, _ = env
+def test_studio_video_search_opens_each_video_at_its_matching_second(env):
+    app, double = env
     t, room_id, _ = teacher_with_room(app)
     page = t.get(f"/app/rooms/{room_id}/studio")
-    assert 'href="/teacher"' in page.text and "أدوات الفيديو" in page.text
+    assert "ابحث عن شرح بالفيديو" in page.text and "ولّد فيديو متحركًا" in page.text
+    token = csrf_of(page.text)
+    out = t.post(f"/app/rooms/{room_id}/studio/videos/search", data={"q": "ما معنى البناء الضوئي؟"},
+                 headers={**HX, "X-CSRF-Token": token})
+    first = load_sample("video_search")["results"][0]
+    assert first["open_at"] in out.text and first["video_id"] in out.text
+    assert "data-video-prev" in out.text and "data-video-next" in out.text
+    assert [c for c in double.calls if c[1] == "/teacher/videos/search"][-1][2]["q"] == "ما معنى البناء الضوئي؟"
+    short = t.post(f"/app/rooms/{room_id}/studio/videos/search", data={"q": "a"}, headers={**HX, "X-CSRF-Token": token})
+    assert "اكتب السؤال أولًا" in short.text
+
+
+def test_studio_video_generation_polls_until_the_clip_is_ready(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    token = csrf_of(t.get(f"/app/rooms/{room_id}/studio").text)
+    started = t.post(f"/app/rooms/{room_id}/studio/videos/generate", data={"prompt": "نبات يمتص الماء من التربة", "duration": "5"},
+                     headers={**HX, "X-CSRF-Token": token})
+    job = load_sample("video_job")
+    assert f"/studio/videos/generate/{job['task_id']}" in started.text and 'hx-trigger="load delay:5s"' in started.text
+    sent = [c[2] for c in double.calls if c[1] == "/teacher/videos/generate"][-1]
+    assert sent["audio"] == "false" and sent["duration"] == "5" and sent["teacher_id"].startswith("u_")
+    done = t.get(f"/app/rooms/{room_id}/studio/videos/generate/{job['task_id']}", headers=HX)
+    assert load_sample("video_job_status")["video_url"] in done.text and "<video" in done.text
+    gif = t.post(f"/app/rooms/{room_id}/studio/videos/generate", data={"prompt": "مشهد تعليمي بسيط"},
+                 files={"image": ("x.gif", b"GIF89a", "image/gif")}, headers={**HX, "X-CSRF-Token": token})
+    assert "JPG أو PNG أو WebP" in gif.text
+    no_prompt = t.post(f"/app/rooms/{room_id}/studio/videos/generate", data={"prompt": ""}, headers={**HX, "X-CSRF-Token": token})
+    assert "اكتب وصف المشهد أولًا" in no_prompt.text
+
+
+def test_teacher_saves_a_presenter_image_on_the_profile(env):
+    app, _ = env
+    t, _, _ = teacher_with_room(app)
+    page = t.get("/app/profile")
+    assert "صورة المقدّم" in page.text
+    r = t.post("/app/profile/avatar", data={"csrf_token": csrf_of(page.text)},
+               files={"image": ("me.png", b"\x89PNG-ME", "image/png")})
+    assert "تم حفظ الصورة" in r.text
+    img = t.get("/app/profile/avatar")
+    assert img.status_code == 200 and img.headers["content-type"].startswith("image/")
 
 
 def test_studio_requires_topic_and_needs(env):

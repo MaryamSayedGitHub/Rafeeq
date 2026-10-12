@@ -533,6 +533,96 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TeacherAssistant" }
 
+  /teacher/videos/search:
+    get:
+      tags: [M5 teacher]
+      operationId: searchTeachingVideos
+      summary: YouTube videos for a question, each opening at the second whose transcript answers it.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2, maxLength: 300 } }
+        - { name: top_k, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 10, default: 5 } }
+      responses:
+        "200":
+          description: Sample file samples/video_search.json. Empty results (not an error) when search or embeddings are unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoSearch" }
+
+  /teacher/videos/generate:
+    post:
+      tags: [M5 teacher]
+      operationId: generateVideo
+      summary: Start an animated video (paid, async). Without an image, the teacher's presenter image is the first frame if saved.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                teacher_id: { type: string }
+                prompt: { type: string, minLength: 3, maxLength: 800 }
+                duration: { type: integer, minimum: 2, maximum: 6, default: 5 }
+                audio: { type: boolean, default: false }
+                image: { type: string, format: binary }
+      responses:
+        "200":
+          description: Sample file samples/video_job.json. 503 when DASHSCOPE_API_KEY is not set, 502 when the provider refuses.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoJob" }
+
+  /teacher/videos/generate/{task_id}:
+    get:
+      tags: [M5 teacher]
+      operationId: videoJobStatus
+      summary: Poll an animated video job until it is no longer PENDING or RUNNING.
+      parameters:
+        - { name: task_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Sample file samples/video_job_status.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoJobStatus" }
+
+  /teacher/avatar:
+    post:
+      tags: [M5 teacher]
+      operationId: saveTeacherAvatar
+      summary: Save the teacher's presenter image (first frame of their animated videos).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [teacher_id, image]
+              properties:
+                teacher_id: { type: string }
+                image: { type: string, format: binary }
+      responses:
+        "200":
+          description: Sample file samples/avatar_saved.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AvatarSaved" }
+
+  /teacher/avatar/{teacher_id}:
+    get:
+      tags: [M5 teacher]
+      operationId: getTeacherAvatar
+      summary: The saved presenter image. 404 if the teacher has none.
+      parameters:
+        - { name: teacher_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The image file
+          content:
+            image/*:
+              schema: { type: string, format: binary }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1145,6 +1235,56 @@ components:
           type: array
           description: What the assistant learned from approved sessions and change requests, shown to the teacher
           items: { type: string }
+
+    VideoMoment:
+      type: object
+      additionalProperties: false
+      required: [video_id, title, channel, thumbnail, start_sec, end_sec, open_at, text, score, url]
+      properties:
+        video_id: { type: string }
+        title: { type: string }
+        channel: { type: string }
+        thumbnail: { type: string }
+        start_sec: { type: number, minimum: 0 }
+        end_sec: { type: number, minimum: 0 }
+        open_at: { type: string, description: "mm:ss of start_sec" }
+        text: { type: string, description: "The transcript excerpt that matched" }
+        score: { type: number, description: "cosine similarity, higher = closer" }
+        url: { type: string, description: "YouTube link that opens at start_sec" }
+
+    VideoSearch:
+      type: object
+      additionalProperties: false
+      required: [results]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/VideoMoment" }
+
+    VideoJob:
+      type: object
+      additionalProperties: false
+      required: [task_id, model, used_avatar]
+      properties:
+        task_id: { type: string }
+        model: { type: string }
+        used_avatar: { type: boolean, description: "true if the saved presenter image was the first frame" }
+
+    VideoJobStatus:
+      type: object
+      additionalProperties: false
+      required: [status, video_url, error]
+      properties:
+        status: { type: string, enum: [PENDING, RUNNING, SUCCEEDED, FAILED, ERROR, UNKNOWN, CANCELED] }
+        video_url: { type: [string, "null"], description: "only when SUCCEEDED; valid for 24 hours" }
+        error: { type: [string, "null"] }
+
+    AvatarSaved:
+      type: object
+      additionalProperties: false
+      required: [avatar_filename]
+      properties:
+        avatar_filename: { type: string }
 
     SessionFile:
       type: object

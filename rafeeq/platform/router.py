@@ -14,6 +14,7 @@ from rafeeq.copilot.supervisor import handle_message
 from rafeeq.platform import service
 from rafeeq.samples import load_sample
 from rafeeq.snap.reader import NotAnImage, ReaderUnavailable, read_snap
+from rafeeq.teacher import class_report
 
 router = APIRouter(tags=["M1 platform"])
 
@@ -152,7 +153,13 @@ def list_room_students(room_id: str, authorization: str | None = Header(default=
     user = _current_user(authorization)
     if user is None:
         return load_sample("room_students")
-    return _run(_store().list_students, user, room_id)
+    result = _run(_store().list_students, user, room_id)
+    # M5: fill each student's level from their quiz results (null stays null without data)
+    levels = class_report.student_levels(class_report.get_store(), room_id)
+    for s in result["students"]:
+        if s["user_id"] in levels:
+            s["mastery"], s["status"] = levels[s["user_id"]]
+    return result
 
 
 # ---------------------------------------------------------------- snap and copilot
@@ -184,4 +191,6 @@ def copilot_message(request: CopilotRequest, authorization: str | None = Header(
         user_id = user["user_id"]
         if user["role"] == "student":
             _store().record_question(user_id, request.room_id)
+            # M5: keep the question text so the lecturer's Class insights can group it by topic
+            class_report.record_question(request.room_id, user_id, request.text)
     return handle_message(request.room_id, request.text, request.file_id, request.mode, user_id)

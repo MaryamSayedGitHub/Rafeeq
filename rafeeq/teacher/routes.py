@@ -32,7 +32,8 @@ from pydantic import BaseModel, ValidationError
 
 from rafeeq.samples import load_sample
 from rafeeq.teacher.lecturer.controller import RevisionLimitReached, SessionNotFound, SessionNotWaiting
-from rafeeq.teacher.lecturer.long_term_store import list_sessions, load_memory
+from rafeeq.teacher.lecturer.long_term_store import get_profile, list_sessions, load_memory, put_profile
+from rafeeq.teacher import class_report
 from rafeeq.teacher.lecturer import video_discovery, video_gen, youtube_discovery
 from rafeeq.teacher.lecturer.schemas import ApproveRequest as Decision
 from rafeeq.teacher.lecturer.schemas import SessionRequest
@@ -161,6 +162,68 @@ def search_videos_api(
     return {"results": youtube_discovery.search(q, top_k=top_k)}
 
 
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _avatar_file(teacher_id: str) -> Path | None:
+    """The teacher's saved presenter image, if any (any extension)."""
+    if not teacher_id or "/" in teacher_id or "\\" in teacher_id or teacher_id.startswith("."):
+        return None
+    return next(iter(sorted(AVATAR_DIR.glob(f"{teacher_id}.*"))), None)
+
+
+async def _read_image(image: UploadFile | None) -> tuple[bytes | None, str]:
+    if image is None or not image.filename:
+        return None, "image.jpg"
+    data = await image.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "The image is larger than 8 MB")
+    return data, image.filename
+
+
+@router.post("/teacher/videos/generate")
+async def generate_video_api(
+    teacher_id: str = Form(""),
+    prompt: str = Form(..., min_length=3, max_length=800),
+    duration: int = Form(5),
+    audio: bool = Form(False),
+    image: UploadFile | None = File(None),
+):
+    """Start an animated video (Lab 5). Without an image, the teacher's saved presenter image is the
+    first frame if there is one, otherwise it is text-to-video. Paid and async: poll the status route."""
+    image_bytes, image_name = await _read_image(image)
+    used_avatar = False
+    if image_bytes is None and (avatar := _avatar_file(teacher_id)) is not None:
+        image_bytes, image_name, used_avatar = avatar.read_bytes(), avatar.name, True
+    result = video_gen.submit_task(prompt.strip(), image_bytes, image_name, duration=duration, audio=audio)
+    if not result["ok"]:
+        status = 503 if "DASHSCOPE_API_KEY" in result["error"] else 502
+        raise HTTPException(status, f"Video generation could not start: {result['error']}")
+    return {"task_id": result["task_id"], "model": result["model"], "used_avatar": used_avatar}
+
+
+@router.get("/teacher/videos/generate/{task_id}")
+def video_status_api(task_id: str):
+    """status: PENDING / RUNNING / SUCCEEDED / FAILED / ERROR. video_url only when SUCCEEDED (valid 24 h)."""
+    return video_gen.poll_task(task_id)
+
+
+@router.post("/teacher/avatar")
+async def upload_avatar_api(svc: Service, teacher_id: str = Form(..., min_length=1), image: UploadFile = File(...)):
+    """Save the teacher's presenter image (used as the first frame of their animated videos)."""
+    data, name = await _read_image(image)
+    if data is None:
+        raise HTTPException(422, "No image")
+    try:
+        filename = save_avatar(teacher_id, data, name)
+    except ValueError:
+        raise HTTPException(422, "Invalid teacher_id") from None
+    saved = get_profile(svc.store, teacher_id)
+    if saved:
+        put_profile(svc.store, teacher_id, {**saved, "avatar_filename": filename})
+    return {"avatar_filename": filename}
+
+
 @router.post("/teacher/sessions")
 def start_session_api(svc: Service, body: SessionRequest):
     return _start(svc, body)
@@ -202,15 +265,15 @@ def _session_files(svc: TeacherService, session_id: str) -> tuple[str, list[str]
 
 
 @router.get("/teacher/rooms/{room_id}/insights")
-def insights(room_id: str):
-    # TODO(M5): build from M4's /events (question_event) once they are stored.
-    return load_sample("insights")
+def insights(svc: Service, room_id: str):
+    """Real data: the room's student questions grouped by topic + repeated quiz mistakes (class_report.py)."""
+    return class_report.build_insights(svc.store, room_id)
 
 
 @router.get("/teacher/rooms/{room_id}/report")
-def report(room_id: str):
-    # TODO(M5): build from M4's student profiles once they exist.
-    return load_sample("class_report")
+def report(svc: Service, room_id: str):
+    """Real data: class mastery per topic and students at risk, from recorded quiz results (class_report.py)."""
+    return class_report.build_report(svc.store, room_id)
 
 
 # ======================================================================== pages
@@ -297,10 +360,10 @@ async def save_profile_form(
 
 @router.get("/teacher/avatar/{teacher_id}")
 def teacher_avatar(teacher_id: str):
-    filename = next((p.name for p in AVATAR_DIR.glob(f"{teacher_id}.*")), None)
-    if not filename:
+    path = _avatar_file(teacher_id)
+    if path is None:
         raise HTTPException(404, "No avatar saved for this teacher")
-    return FileResponse(AVATAR_DIR / filename)
+    return FileResponse(path)
 
 
 @router.post("/teacher/ui/sessions", response_class=HTMLResponse)
@@ -376,7 +439,7 @@ async def generate_video_form(
         # No image uploaded for this specific video: fall back to the teacher's
         # saved character/avatar image (if any), so the same "presenter" shows
         # up across videos without re-uploading every time.
-        avatar_file = next(iter(AVATAR_DIR.glob(f"{teacher_id}.*")), None)
+        avatar_file = _avatar_file(teacher_id)
         if avatar_file is not None:
             image_bytes = avatar_file.read_bytes()
             image_filename = avatar_file.name

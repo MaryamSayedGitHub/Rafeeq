@@ -162,6 +162,25 @@ class ContractDouble:
                 d.violations.append("GET /teacher/profile: missing teacher_id")
             return JSONResponse(load_sample("teacher_profile"))
 
+        async def video_generate(request):
+            if (g := d._guard("videos")):
+                return g
+            form = await request.form()
+            d.calls.append((request.method, request.url.path, {k: v for k, v in form.items() if k != "image"}))
+            if len(str(form.get("prompt", ""))) < 3:
+                d.violations.append("POST /teacher/videos/generate: prompt missing")
+            return JSONResponse({**load_sample("video_job"), "used_avatar": form.get("image") is None})
+
+        async def avatar(request):
+            if (g := d._guard("profile")):
+                return g
+            if request.method == "POST":
+                form = await request.form()
+                if not form.get("teacher_id") or form.get("image") is None:
+                    d.violations.append("POST /teacher/avatar: teacher_id and image are required")
+                return JSONResponse(load_sample("avatar_saved"))
+            return Response(b"\x89PNG-AVATAR", media_type="image/png")
+
         async def session_file(request):
             if (g := d._guard("sessions")):
                 return g
@@ -190,6 +209,11 @@ class ContractDouble:
             Route("/teacher/sessions", sample_get("sessions", "teacher_sessions", ("teacher_id",)), methods=["GET"]),
             Route("/teacher/sessions/{sid}", sample_get("sessions", "lecturer_session"), methods=["GET"]),
             Route("/teacher/sessions/{sid}/files/{name}", session_file, methods=["GET"]),
+            Route("/teacher/videos/search", sample_get("videos", "video_search", ("q",)), methods=["GET"]),
+            Route("/teacher/videos/generate", video_generate, methods=["POST"]),
+            Route("/teacher/videos/generate/{task_id}", sample_get("videos", "video_job_status"), methods=["GET"]),
+            Route("/teacher/avatar", avatar, methods=["POST"]),
+            Route("/teacher/avatar/{teacher_id}", avatar, methods=["GET"]),
         ] + [
             Route("/teacher/sessions", sample_post("sessions", "LecturerSessionRequest", "lecturer_session"), methods=["POST"]),
             Route("/teacher/sessions/{sid}/decision", sample_post("sessions", "LecturerDecision", "lecturer_session"), methods=["POST"]),

@@ -73,6 +73,8 @@ def save_avatar(teacher_id: str, data: bytes, original_filename: str) -> str:
     <teacher_id>.<ext>, replacing any previous one. Returns the saved filename,
     which is what Lab 5's video generation reuses as the default first-frame
     image when the teacher doesn't upload a different one for that request."""
+    if not teacher_id or any(c in teacher_id for c in "/\\*?[]") or teacher_id.startswith("."):
+        raise ValueError("invalid teacher_id")
     ext = Path(original_filename).suffix.lower() or ".jpg"
     if ext not in (".jpg", ".jpeg", ".png", ".webp"):
         ext = ".jpg"
@@ -117,5 +119,8 @@ def save_profile(store, update: TeacherProfileUpdate) -> str:
         while get_profile(store, teacher_id):
             n += 1
             teacher_id = f"{base}-{n}"
-    put_profile(store, teacher_id, update.model_dump(exclude={"teacher_id"}))
+    data = update.model_dump(exclude={"teacher_id"})
+    if not data["avatar_filename"]:  # managed by the avatar upload; keep the saved one
+        data["avatar_filename"] = (get_profile(store, teacher_id) or {}).get("avatar_filename", "")
+    put_profile(store, teacher_id, data)
     return teacher_id

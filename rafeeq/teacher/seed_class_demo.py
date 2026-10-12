@@ -11,7 +11,7 @@ and Class insights pages show real computed reports instead of sample files.
 
 Needs DATABASE_URL (Postgres): an in-memory store would be gone when this script exits.
 Topics: the lecturer's sessions for this room if there are any, otherwise three biology topics.
---add-students creates demo student accounts in that room (password: demo1234) if it has none.
+--add-students N adds demo student accounts until the room has N students (password: demo1234).
 """
 
 import argparse
@@ -60,14 +60,20 @@ def _members(room_id: str, add: int) -> dict[str, str]:
         sys.exit(f"Room '{room_id}' not found. Open the room in /app and copy its id from the address bar.")
     members = {uid: platform.db["users"][uid]["name"]
                for uid in platform.db["members"].get(room_id, []) if uid in platform.db["users"]}
-    if not members and add:
+    if len(members) < add:
         names = ["عمر خالد", "سارة محمود", "يوسف أحمد", "منى علي", "كريم حسن", "ليلى سمير"]
-        for i in range(add):
-            name = names[i % len(names)]
-            login = platform.register(name, f"demo.student{i + 1}.{room_id}@rafeeq.local", "demo1234",
-                                      "student", room["join_code"])
+        taken = {u["email"] for u in platform.db["users"].values()}
+        created, i = 0, 0
+        while len(members) < add:
+            i += 1
+            email = f"demo.student{i}.{room_id}@rafeeq.local"
+            if email in taken:
+                continue
+            name = names[(i - 1) % len(names)]
+            login = platform.register(name, email, "demo1234", "student", room["join_code"])
             members[login["user_id"]] = name
-        print(f"Created {add} demo students (password demo1234).")
+            created += 1
+        print(f"Created {created} demo students (password demo1234).")
     if not members:
         sys.exit("The room has no students. Join it with a student account, or use --add-students 4.")
     return members

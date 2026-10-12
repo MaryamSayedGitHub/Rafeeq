@@ -14,6 +14,9 @@ videos and guessing timestamps with speech-to-text. We wrote the script
 ourselves, so we already know -- line by line -- what is said and exactly
 when (from how long the TTS took to say each line). No transcription needed.
 
+NOTE: this lab uses its own table (lab4_video_segments) so it never clashes with the
+real video_segments table in rafeeq/teacher/lecturer/video_discovery.py.
+
 Steps:
   1. Break a lesson script into timed segments (text + start/end seconds)
   2. Turn each segment into an embedding vector (Gemini text-embedding-004)
@@ -142,11 +145,11 @@ def to_vector_literal(vector: list[float]) -> str:
 
 
 def setup_table() -> None:
-    """Creates the pgvector extension and the video_segments table (once)."""
+    """Creates the pgvector extension and the lab4_video_segments table (once)."""
     with _raw_connection() as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS video_segments (
+            CREATE TABLE IF NOT EXISTS lab4_video_segments (
                 id          SERIAL PRIMARY KEY,
                 video_id    TEXT NOT NULL,
                 title       TEXT NOT NULL,
@@ -158,17 +161,17 @@ def setup_table() -> None:
         """)
         # HNSW index = fast search even once we have thousands of segments
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS video_segments_embedding_idx
-            ON video_segments USING hnsw (embedding vector_cosine_ops)
+            CREATE INDEX IF NOT EXISTS lab4_video_segments_embedding_idx
+            ON lab4_video_segments USING hnsw (embedding vector_cosine_ops)
         """)
-    print("[DB] video_segments table ready.")
+    print("[DB] lab4_video_segments table ready.")
 
 
 def index_segments(segments: list[Segment]) -> None:
     """Embeds and inserts each segment. Skips a video_id that is already indexed."""
     with get_connection() as conn:
         existing = conn.execute(
-            "SELECT 1 FROM video_segments WHERE video_id = %s LIMIT 1",
+            "SELECT 1 FROM lab4_video_segments WHERE video_id = %s LIMIT 1",
             (segments[0].video_id,),
         ).fetchone()
         if existing:
@@ -179,7 +182,7 @@ def index_segments(segments: list[Segment]) -> None:
             vector = to_vector_literal(embed_text(seg.text))
             conn.execute(
                 """
-                INSERT INTO video_segments (video_id, title, start_sec, end_sec, text, embedding)
+                INSERT INTO lab4_video_segments (video_id, title, start_sec, end_sec, text, embedding)
                 VALUES (%s, %s, %s, %s, %s, %s::vector)
                 """,
                 (seg.video_id, seg.title, seg.start_sec, seg.end_sec, seg.text, vector),
@@ -201,7 +204,7 @@ def find_relevant_moment(question: str, top_k: int = 1) -> list[dict]:
             """
             SELECT video_id, title, start_sec, end_sec, text,
                    1 - (embedding <=> %s::vector) AS score
-            FROM video_segments
+            FROM lab4_video_segments
             ORDER BY embedding <=> %s::vector
             LIMIT %s
             """,

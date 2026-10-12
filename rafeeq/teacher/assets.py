@@ -27,7 +27,7 @@ from rafeeq.teacher.lecturer.long_term_store import lecturer_key
 
 log = logging.getLogger(__name__)
 
-KINDS = ("pptx", "code", "quiz", "image", "source_video", "generated_video", "audio")
+KINDS = ("pptx", "code", "quiz", "image", "source_video", "generated_video", "audio", "video", "theme")
 ORIGINS = ("upload", "external", "edited", "ai_generated")
 STATUSES = ("pending", "ready", "failed")
 ROOTS = ("sessions", "assets", "")

@@ -55,6 +55,15 @@ SAMPLE_TO_SCHEMA = {
     "asset": "Asset",
     "assets": "AssetList",
     "asset_create": "AssetCreate",
+    "deck": "Deck",
+    "decks": "DeckList",
+    "themes": "ThemeList",
+    "course": "Course",
+    "courses": "CourseList",
+    "room_courses": "RoomCourses",
+    "media_capabilities": "MediaCapabilities",
+    "visual_job": "VisualJob",
+    "visual_status": "VisualStatus",
 }
 
 

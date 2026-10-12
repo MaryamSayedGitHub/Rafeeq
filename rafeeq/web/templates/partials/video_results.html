@@ -10,13 +10,22 @@
     <span class="muted small" data-video-now aria-live="polite"></span>
     <button class="btn btn-secondary btn-sm" type="button" data-video-next><span>{{ t('video.next') }}</span>{{ icon('chevron', 16, 'flip') }}</button>
   </div>
-  <form class="video-save" hx-post="{{ u('/rooms/' ~ room.room_id ~ '/studio/assets') }}" hx-target="#video-save-note" hx-swap="innerHTML">
+  <form class="video-save" hx-post="{{ u('/video/moments') }}" hx-target="#video-save-note" hx-swap="innerHTML">
     <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="room_id" value="{{ room_id }}">
     <input type="hidden" name="title" data-save-title>
     <input type="hidden" name="source_url" data-save-url>
     <input type="hidden" name="start_sec" data-save-start>
     <input type="hidden" name="end_sec" data-save-end>
     <button class="btn btn-secondary btn-sm" type="submit">{{ icon('folder', 16) }}<span>{{ t('video.save') }}</span></button>
+  </form>
+  <form class="video-save" hx-post="{{ u('/video/cover') }}" hx-target="#video-save-note" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="room_id" value="{{ room_id }}">
+    <input type="hidden" name="title" data-save-title>
+    <input type="hidden" name="video_id" data-cover-id>
+    <input type="hidden" name="start_sec" data-cover-start>
+    <button class="btn btn-secondary btn-sm" type="submit">{{ icon('image', 16) }}<span>{{ t('video.save_cover') }}</span></button>
   </form>
   <div id="video-save-note" aria-live="polite"></div>
   <p class="small" dir="auto" data-video-excerpt></p>
@@ -48,7 +57,9 @@
     var r = results[idx];
     box.querySelector('[data-video-now]').textContent = (idx + 1) + ' / ' + results.length;
     box.querySelector('[data-video-excerpt]').textContent = r.text;
-    box.querySelector('[data-save-title]').value = r.title;
+    box.querySelectorAll('[data-save-title]').forEach(function (el) { el.value = r.title; });
+    box.querySelector('[data-cover-id]').value = r.video_id;
+    box.querySelector('[data-cover-start]').value = r.start_sec;
     box.querySelector('[data-save-url]').value = 'https://www.youtube.com/watch?v=' + encodeURIComponent(r.video_id) + '&t=' + Math.floor(r.start_sec) + 's';
     box.querySelector('[data-save-start]').value = r.start_sec;
     box.querySelector('[data-save-end]').value = r.end_sec;

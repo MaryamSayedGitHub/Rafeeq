@@ -18,6 +18,7 @@ from starlette.staticfiles import StaticFiles
 from rafeeq.web import views_auth as auth
 from rafeeq.web import views_rooms as rooms
 from rafeeq.web import views_student as student
+from rafeeq.web import views_studios as studios
 from rafeeq.web import views_teacher as teacher
 from rafeeq.web.api import Api
 from rafeeq.web.common import HERE, Redirect, is_htmx, notice, render, tr
@@ -61,10 +62,41 @@ def _routes() -> list:
         R(room + "/studio/sessions/{session_id}", teacher.session_page, methods=["GET"]),
         R(room + "/studio/sessions/{session_id}/decision", teacher.session_decision, methods=["POST"]),
         R(room + "/studio/sessions/{session_id}/files/{name:path}", teacher.session_file, methods=["GET"]),
-        R(room + "/studio/videos/search", teacher.studio_video_search, methods=["POST"]),
-        R(room + "/studio/videos/generate", teacher.studio_video_generate, methods=["POST"]),
-        R(room + "/studio/videos/generate/{task_id}", teacher.studio_video_status, methods=["GET"]),
-        R(room + "/studio/assets", teacher.studio_asset_save, methods=["POST"]),
+        # Lesson Studio entry + the other studios, each on its own page
+        R("/studio", studios.studio_entry, methods=["GET"]),
+        R("/video", studios.video_page, methods=["GET"]),
+        R("/video/search", studios.video_search, methods=["POST"]),
+        R("/video/moments", studios.video_moment_save, methods=["POST"]),
+        R("/video/cover", studios.video_cover_save, methods=["POST"]),
+        R("/presentations", studios.presentations_page, methods=["GET"]),
+        R("/presentations/open", studios.presentation_open, methods=["GET"]),
+        R("/presentations/themes", studios.theme_extract, methods=["POST"]),
+        R("/presentations/{deck_id}", studios.deck_page, methods=["GET"]),
+        R("/presentations/{deck_id}", studios.deck_save, methods=["POST"]),
+        R("/presentations/{deck_id}/export", studios.deck_export, methods=["POST"]),
+        R("/presentations/{deck_id}/slides/{index:int}/image", studios.deck_slide_image, methods=["POST"]),
+        R("/presentations/{deck_id}/slides/{index:int}/visual", studios.deck_slide_visual, methods=["POST"]),
+        R("/presentations/{deck_id}/visuals/{task_id}", studios.deck_visual_status, methods=["GET"]),
+        R("/media", studios.media_page, methods=["GET"]),
+        R("/media/upload", studios.media_upload, methods=["POST"]),
+        R("/media/speech", studios.media_speech, methods=["POST"]),
+        R("/media/video/generate", studios.media_video_generate, methods=["POST"]),
+        R("/media/video/generate/{task_id}", studios.media_video_status, methods=["GET"]),
+        R("/media/{asset_id}/edit", studios.media_edit, methods=["POST"]),
+        R("/learning", studios.learning_page, methods=["GET"]),
+        R("/learning/courses", studios.course_create, methods=["POST"]),
+        R("/learning/{course_id}", studios.course_page, methods=["GET"]),
+        R("/learning/{course_id}/update", studios.course_update, methods=["POST"]),
+        R("/learning/{course_id}/delete", studios.course_delete, methods=["POST"]),
+        R("/learning/{course_id}/publish", studios.course_publish, methods=["POST"]),
+        R("/learning/{course_id}/unpublish", studios.course_unpublish, methods=["POST"]),
+        R("/learning/{course_id}/lessons", studios.lesson_add, methods=["POST"]),
+        R("/learning/{course_id}/lessons/{lesson_id}/update", studios.lesson_update, methods=["POST"]),
+        R("/learning/{course_id}/lessons/{lesson_id}/delete", studios.lesson_delete, methods=["POST"]),
+        R("/learning/{course_id}/lessons/{lesson_id}/move", studios.lesson_move, methods=["POST"]),
+        R("/learning/{course_id}/lessons/{lesson_id}/assets", studios.lesson_assets, methods=["POST"]),
+        R(room + "/learn", studios.learn_page, methods=["GET"]),
+        R(room + "/courses/{course_id}/assets/{asset_id}/file", studios.learn_file, methods=["GET"]),
         R("/library", teacher.library_page, methods=["GET"]),
         R("/assets/{asset_id}/file", teacher.asset_file, methods=["GET"]),
         R("/profile", teacher.profile_page, methods=["GET"]),

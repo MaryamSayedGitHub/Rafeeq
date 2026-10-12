@@ -100,6 +100,19 @@
     {% endif %}
   </div>
 
+  {% if session.status == 'done' %}
+  <footer class="session-next" aria-label="{{ t('session.next_steps') }}">
+    <h3 class="small-title">{{ icon('arrow', 16, 'flip') }}<span>{{ t('session.next_steps') }}</span></h3>
+    <p class="muted small">{{ t('session.next_steps_text') }}</p>
+    <div class="asset-actions">
+      {% if d.slides %}<a class="btn btn-primary btn-sm" href="{{ u('/presentations/open', session=session.session_id, room=room.room_id) }}">{{ icon('presentation', 16) }}<span>{{ t('session.next_deck') }}</span></a>{% endif %}
+      <a class="btn btn-secondary btn-sm" href="{{ u('/video', session=session.session_id, room=room.room_id) }}">{{ icon('search', 16) }}<span>{{ t('session.next_video') }}</span></a>
+      <a class="btn btn-secondary btn-sm" href="{{ u('/media', session=session.session_id, room=room.room_id) }}">{{ icon('image', 16) }}<span>{{ t('session.next_media') }}</span></a>
+      <a class="btn btn-secondary btn-sm" href="{{ u('/learning', session=session.session_id, room=room.room_id) }}">{{ icon('book', 16) }}<span>{{ t('session.next_course') }}</span></a>
+    </div>
+  </footer>
+  {% endif %}
+
   {% if session.status == 'awaiting_approval' %}
   <footer class="session-actions">
     <form hx-post="{{ u(base ~ '/decision') }}" hx-target="#session-panel" hx-swap="outerHTML" hx-indicator="#decision-indicator">

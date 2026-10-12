@@ -68,6 +68,14 @@ def final_agent(state) -> dict:
     except Exception as e:
         log.warning("Could not register session files in the library: %s: %s", type(e).__name__, str(e)[:200])
 
+    # Presentation Studio: the approved slides become an editable deck (never fails the session).
+    try:
+        from rafeeq.teacher import decks
+
+        decks.create_from_draft(current_store(), brief.get("lecturer_id", ""), session_id, draft, brief)
+    except Exception as e:
+        log.warning("Could not create the editable deck: %s: %s", type(e).__name__, str(e)[:200])
+
     # Video discovery (Lab 4): index each slide's speaker notes as a timed segment, so a
     # student question can later jump to the exact slide that explains it. Never blocks or
     # fails the session -- see video_discovery.index_session's own try/except.

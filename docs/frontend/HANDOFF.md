@@ -211,8 +211,8 @@ Merged with a real `git merge` (her commits keep their history). Only `pyproject
 
 | Feature | `/app` page | M5 API |
 |---|---|---|
-| YouTube videos that open at the second answering a question, Previous / Next | Studio panel "ابحث عن شرح بالفيديو" | `GET /teacher/videos/search` (no key) |
-| Animated video from a description or image (paid, QwenCloud Wan) | Studio panel "ولّد فيديو متحركًا" (polls every 5 s) | `POST /teacher/videos/generate`, `GET /teacher/videos/generate/{task_id}` (`DASHSCOPE_API_KEY`) |
+| YouTube videos that open at the second answering a question, Previous / Next | page `/app/video` (Video Discovery Studio) | `GET /teacher/videos/search` (no key) |
+| Animated video from a description or image (paid, QwenCloud Wan) | page `/app/media` (Visual & Media Studio; polls every 5 s) | `POST /teacher/videos/generate`, `GET /teacher/videos/generate/{task_id}` (`DASHSCOPE_API_KEY`) |
 | Presenter image used as the first frame when no image is uploaded | Profile page | `POST /teacher/avatar`, `GET /teacher/avatar/{teacher_id}` |
 
 All are in `contracts/openapi.yaml` with samples. `TeacherProfile` gained the optional `avatar_filename`.
@@ -238,4 +238,30 @@ API (Bearer token of a teacher is always required): `GET /teacher/assets`, `POST
 
 Authorization: `/teacher/*` routes now check the Bearer token when one is sent (another teacher's `teacher_id` -> 403). Without the header they behave as before (old `/teacher` pages). Still open: `GET /teacher/sessions/{id}` and its decision route do not check who owns the session.
 
-Not built yet: the Library page, picking assets inside Lesson Studio, Presentation Studio, Media Studio, publishing to students.
+The studios, Library page and publishing are described in the next section.
+
+### Separate studios (one page each, connected by ids in the URL)
+
+Lesson Studio no longer holds the other tools. Each studio is its own route in the same layout (sidebar group "Studios"), and work moves between them through the library and the URL (`?room=&session=&asset=&theme=`).
+
+| Page | Route | Purpose | API it calls |
+|---|---|---|---|
+| Lesson Studio | `/app/studio` (redirects to the last room) and `/app/rooms/{id}/studio` | Write a lesson with the agents; when it is approved it offers "next steps" (slides, video, media, course) carrying the session id | `/teacher/sessions…` (unchanged) |
+| Video Discovery | `/app/video` | Search YouTube moments; save a moment or the cover picture to the library | `/teacher/videos/search`, `/teacher/assets`, `/teacher/media/thumbnail` |
+| Presentation Studio | `/app/presentations`, `/app/presentations/{deck_id}` | Edit slides, choose a theme (built-in or extracted from an uploaded .pptx), add library pictures, draw a picture (LLM writes the prompt, diffusion draws it), export a new .pptx version | `/teacher/decks…`, `/teacher/themes…`, `/teacher/visuals/{id}` |
+| Visual & Media Studio | `/app/media` | Upload and edit images (crop, rotate, flip, resize, brightness, contrast, grayscale), trim/mute/volume/extract audio from video and audio (ffmpeg), text to speech, generate animated video. Edits are new versions; originals stay | `/teacher/media…`, `/teacher/videos/generate…` |
+| My Learning Platform | `/app/learning`, `/app/learning/{course_id}` | Courses and lessons built from library items; publish a snapshot to a room | `/teacher/courses…` |
+| Student view | `/app/rooms/{id}/learn` | Published courses only | `/rooms/{id}/courses`, `…/assets/{id}/file` |
+| My Library | `/app/library` | Hub: lessons, decks, courses, themes and every asset, with "use in…" actions | `/teacher/assets`, `/teacher/decks`, `/teacher/courses` |
+
+**Data model (no new database, no migration).** Same LangGraph store as before: `("lecturer", <id>, "assets"|"decks"|"courses")`; published courses are copied to `("class", <room_id>, "courses")` so students see a snapshot, and the teacher's later edits show as `unpublished_changes` until they publish again. Asset kinds now include `video` (uploaded) and `theme`. A deck is created automatically when a lesson is approved (`final_agent`), or on first listing for older lessons. Code: `rafeeq/teacher/{themes,decks,courses,media_tools,visuals,studio_routes}.py`, `rafeeq/web/views_studios.py`.
+
+**Safety.** Every route needs a teacher token (students 403); a teacher only sees their own decks, courses and assets; pictures in a deck must be the teacher's own images; students are served only files in the published snapshot of a room they belong to. Repeating an edit, upload, speech or picture request returns the existing result instead of doing the work (and paying) twice.
+
+**Limits to know.**
+- Needs `DASHSCOPE_API_KEY` for pictures/video (503 otherwise). The image model name and endpoint are unverified against the live service.
+- Video and audio editing need the `ffmpeg` binary on the server (503 with a clear message otherwise). Image editing uses Pillow only.
+- Text to speech needs the `edge-tts` package and internet.
+- No exact-frame screenshot of a YouTube video: the cover picture is saved instead (or upload your own screenshot).
+- Saved videos are served without range requests (seeking depends on the browser).
+- `GET /teacher/sessions/{id}` and its decision route still lack ownership checks. The old `/teacher` pages remain.

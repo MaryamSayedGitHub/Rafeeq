@@ -270,10 +270,8 @@ async def session_file(request: Request):
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe, safe='')}"})
 
 
-# ---------------------------------------------------------------- studio video tools (M5)
-# YouTube search that opens at the right second, and animated video generation (QwenCloud
-# Wan models, paid). The work happens in M5's API (rafeeq/teacher/routes.py); these views
-# only validate the form and render the result.
+# ---------------------------------------------------------------- image upload helpers (M5)
+# Shared by the avatar upload and the Visual & Media Studio (rafeeq/web/views_studios.py).
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -298,95 +296,31 @@ async def _image_part(upload) -> tuple | None | bool:
     return (upload.filename, data, upload.content_type)
 
 
-async def studio_video_search(request: Request):
-    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
-    form = await check_csrf(request)
-    q = str(form.get("q", "")).strip()
-    if len(q) < 3:
-        return notice(request, tr(request, "video.need_question"), "warning")
-    res = await api(request).get("/teacher/videos/search", token=user["token"],
-                                 params={"q": q[:300], "top_k": 5}, timeout=180)
-    ensure_session(request, res)
-    if not res.ok:
-        return notice(request, api_message(request, res), "warning")
-    return render(request, "partials/video_results.html", room=room, query=q, results=res.data.get("results", []))
-
-
-async def studio_video_generate(request: Request):
-    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
-    if _image_too_large(request):
-        return notice(request, tr(request, "video.bad_image"), "warning")
-    form = await check_csrf(request)
-    prompt = str(form.get("prompt", "")).strip()
-    if len(prompt) < 5:
-        return notice(request, tr(request, "video.need_prompt"), "warning")
-    image = await _image_part(form.get("image"))
-    if image is False:
-        return notice(request, tr(request, "video.bad_image"), "warning")
-    data = {"teacher_id": user["user_id"], "prompt": prompt[:800],
-            "duration": str(_int(form.get("duration"), 2, 6, 5)), "audio": "true" if form.get("audio") else "false"}
-    res = await api(request).post("/teacher/videos/generate", token=user["token"], data=data,
-                                  files={"image": image} if image else None, timeout=60)
-    ensure_session(request, res)
-    if not res.ok:
-        return notice(request, tr(request, "video.no_key") if res.status == 503 else api_message(request, res), "warning")
-    return render(request, "partials/video_job.html", room=room, task_id=res.data["task_id"], job=None,
-                  used_avatar=res.data.get("used_avatar", False), prompt=prompt)
-
-
-async def studio_video_status(request: Request):
-    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
-    task_id = request.path_params["task_id"]
-    res = await api(request).get(f"/teacher/videos/generate/{quote(task_id, safe='')}", token=user["token"], timeout=30)
-    ensure_session(request, res)
-    job = dict(res.data) if res.ok else {"status": "ERROR", "video_url": None, "error": api_message(request, res)}
-    saved = bool(job.get("file_url") and job.get("asset_id"))
-    if saved:  # play our own copy through /app (the browser has no API token); it does not expire
-        job["video_url"] = u(request, f"/assets/{quote(job['asset_id'], safe='')}/file")
-    return render(request, "partials/video_job.html", room=room, task_id=task_id, job=job,
-                  used_avatar=False, prompt=request.query_params.get("prompt", "")[:800], saved=saved)
-
-
-async def studio_asset_save(request: Request):
-    """'Save to library' on a YouTube result: the video moment becomes an asset of this teacher."""
-    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
-    form = await check_csrf(request)
-
-    def number(name):
-        try:
-            return max(0.0, float(form.get(name)))
-        except (TypeError, ValueError):
-            return None
-
-    body = {"title": str(form.get("title", "")).strip()[:200], "source_url": str(form.get("source_url", "")).strip()[:500],
-            "start_sec": number("start_sec"), "end_sec": number("end_sec"), "room_id": room["room_id"]}
-    if not body["title"] or not body["source_url"]:
-        return notice(request, tr(request, "library.bad_item"), "warning")
-    res = await api(request).post("/teacher/assets", token=user["token"], json=body)
-    ensure_session(request, res)
-    if not res.ok:
-        return notice(request, api_message(request, res), "warning")
-    return notice(request, tr(request, "library.saved"), "success")
-
-
-LIBRARY_KINDS = ("pptx", "code", "quiz", "image", "source_video", "generated_video", "audio")
+LIBRARY_KINDS = ("pptx", "code", "quiz", "image", "source_video", "generated_video", "video", "audio", "theme")
 
 
 async def library_page(request: Request):
-    """My Library: everything this teacher saved or generated, with filters by type and room."""
+    """My Library: the hub. Every project (lessons, presentations, courses) and every asset this teacher
+    saved or generated in any studio, with filters by type and room and actions to use an item elsewhere."""
     user = require_user(request, "teacher")
     kind = request.query_params.get("kind", "")
     kind = kind if kind in LIBRARY_KINDS else ""
     room_filter = request.query_params.get("room", "")[:60]
     params = {k: v for k, v in {"kind": kind, "room_id": room_filter}.items() if v}
-    assets_res, rooms_res = await gather(api(request).get("/teacher/assets", token=user["token"], params=params, timeout=60),
-                                         api(request).get("/rooms", token=user["token"]))
-    ensure_session(request, assets_res)
-    ensure_session(request, rooms_res)
+    assets_res, rooms_res, sessions_res, decks_res, courses_res = await gather(
+        api(request).get("/teacher/assets", token=user["token"], params=params, timeout=60),
+        api(request).get("/rooms", token=user["token"]),
+        api(request).get("/teacher/sessions", token=user["token"], params={"teacher_id": user["user_id"]}),
+        api(request).get("/teacher/decks", token=user["token"], timeout=60),
+        api(request).get("/teacher/courses", token=user["token"], timeout=60))
+    for res in (assets_res, rooms_res):
+        ensure_session(request, res)
     rooms = rooms_res.get("rooms", [])
     return render(request, "library.html", res=assets_res, assets=assets_res.get("assets", []), rooms=rooms, room=None,
                   tab="library", kind=kind, room_filter=room_filter, kinds=LIBRARY_KINDS,
-                  room_names={r["room_id"]: r["name"] for r in rooms})
+                  room_names={r["room_id"]: r["name"] for r in rooms},
+                  lessons=sessions_res.get("sessions", [])[:8], decks=decks_res.get("decks", [])[:8],
+                  courses=courses_res.get("courses", [])[:8])
 
 
 async def asset_file(request: Request):

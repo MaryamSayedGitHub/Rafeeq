@@ -8,6 +8,7 @@
     <p>{{ t('studio.intro') }}</p>
   </div>
 </div>
+<div class="inline-note">{{ icon('info', 16) }}<span>{{ t('studio.other_studios') }}</span></div>
 
 <div class="studio-layout">
   <section class="panel panel-pad">
@@ -87,46 +88,6 @@
         <p>{{ t('studio.draft_here_text') }}</p>
       </section>
     </div>
-    {# M5 video tools: YouTube at the right second + animated video generation #}
-    <section class="panel panel-pad" aria-labelledby="video-search-title">
-      <h2 class="panel-title" id="video-search-title">{{ t('video.search_title') }}</h2>
-      <p class="muted">{{ t('video.search_text') }}</p>
-      <form class="form-stack" hx-post="{{ u('/rooms/' ~ room.room_id ~ '/studio/videos/search') }}"
-            hx-target="#video-search-area" hx-indicator="#video-search-indicator">
-        <div class="field">
-          <label for="video-q">{{ t('video.question') }}</label>
-          <input class="input" id="video-q" name="q" required minlength="3" maxlength="300" dir="auto" value="{{ prefill.topic }}">
-        </div>
-        <button class="btn btn-secondary" type="submit">{{ icon('search', 18) }}<span>{{ t('video.search') }}</span></button>
-        <div class="htmx-indicator inline-loading" id="video-search-indicator"><span class="spinner"></span>{{ t('video.searching') }}</div>
-      </form>
-      <div id="video-search-area" aria-live="polite"></div>
-    </section>
-    <section class="panel panel-pad" aria-labelledby="video-gen-title">
-      <h2 class="panel-title" id="video-gen-title">{{ t('video.gen_title') }} <span class="badge badge-amber">{{ t('video.paid') }}</span></h2>
-      <p class="muted">{{ t('video.gen_text') }}</p>
-      <form class="form-stack" hx-post="{{ u('/rooms/' ~ room.room_id ~ '/studio/videos/generate') }}" hx-encoding="multipart/form-data"
-            hx-target="#video-gen-area" hx-indicator="#video-gen-indicator">
-        <div class="field">
-          <label for="video-prompt">{{ t('video.prompt') }}</label>
-          <textarea class="input" id="video-prompt" name="prompt" rows="3" required minlength="5" maxlength="800" dir="auto"></textarea>
-        </div>
-        <div class="form-grid">
-          <div class="field">
-            <label for="video-image">{{ t('video.image') }}</label>
-            <input class="input" id="video-image" type="file" name="image" accept="image/png,image/jpeg,image/webp">
-          </div>
-          <div class="field">
-            <label for="video-duration">{{ t('video.duration') }}</label>
-            <input class="input" id="video-duration" name="duration" type="number" min="2" max="6" value="5" dir="ltr">
-          </div>
-        </div>
-        <label class="check-pill"><input type="checkbox" name="audio" value="1"><span>{{ t('video.audio') }}</span></label>
-        <button class="btn btn-secondary" type="submit">{{ icon('sparkle', 18) }}<span>{{ t('video.generate') }}</span></button>
-        <div class="htmx-indicator inline-loading" id="video-gen-indicator"><span class="spinner"></span>{{ t('video.sending') }}</div>
-      </form>
-      <div id="video-gen-area" aria-live="polite"></div>
-    </section>
     <section class="panel panel-pad">
       <h2 class="panel-title">{{ t('studio.past') }}</h2>
       {% if not sessions_res.ok %}

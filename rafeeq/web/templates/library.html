@@ -9,6 +9,42 @@
   </div>
 </div>
 
+<section class="panel panel-pad" aria-labelledby="projects-title">
+  <h2 class="panel-title" id="projects-title">{{ t('library.projects') }}</h2>
+  <div class="project-columns">
+    <div>
+      <h3 class="small-title">{{ icon('sparkle', 16) }}<span>{{ t('library.lessons') }}</span></h3>
+      {% if not lessons %}<p class="muted small">{{ t('library.none_yet') }}</p>{% else %}
+      <ul class="session-list">
+        {% for s in lessons %}
+        <li><div><strong dir="auto">{{ s.topic }}</strong>{% if s.created_at %}<small dir="ltr">{{ s.created_at[:10] }}</small>{% endif %}</div>
+          {% if s.room_id %}<a class="btn btn-secondary btn-sm" href="{{ u('/rooms/' ~ s.room_id ~ '/studio/sessions/' ~ s.session_id) }}">{{ t('session.open') }}</a>{% endif %}</li>
+        {% endfor %}
+      </ul>{% endif %}
+    </div>
+    <div>
+      <h3 class="small-title">{{ icon('presentation', 16) }}<span>{{ t('library.decks') }}</span></h3>
+      {% if not decks %}<p class="muted small">{{ t('library.none_yet') }}</p>{% else %}
+      <ul class="session-list">
+        {% for d in decks %}
+        <li><div><strong dir="auto">{{ d.title }}</strong><small>{{ t('deck.slides_count', n=d.slide_count) }} · {{ d.theme_name }}</small></div>
+          <a class="btn btn-secondary btn-sm" href="{{ u('/presentations/' ~ d.deck_id) }}">{{ t('session.open') }}</a></li>
+        {% endfor %}
+      </ul>{% endif %}
+    </div>
+    <div>
+      <h3 class="small-title">{{ icon('book', 16) }}<span>{{ t('library.courses') }}</span></h3>
+      {% if not courses %}<p class="muted small">{{ t('library.none_yet') }}</p>{% else %}
+      <ul class="session-list">
+        {% for c in courses %}
+        <li><div><strong dir="auto">{{ c.title }}</strong><small>{{ t('course.lessons_count', n=c.lessons|length) }}{% if c.published_room_id %} · {{ t('course.published') }}{% endif %}</small></div>
+          <a class="btn btn-secondary btn-sm" href="{{ u('/learning/' ~ c.course_id) }}">{{ t('session.open') }}</a></li>
+        {% endfor %}
+      </ul>{% endif %}
+    </div>
+  </div>
+</section>
+
 {% if not res.ok %}
   <section class="panel panel-pad">{{ section_state(t, res) }}</section>
 {% else %}

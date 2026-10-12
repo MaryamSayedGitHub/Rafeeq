@@ -180,9 +180,12 @@ class ContractDouble:
                 data = {**data, "asset_id": "a_77aa10cd", "file_url": "/teacher/assets/a_77aa10cd/file"}
             return JSONResponse(data)
 
-        async def asset_create(request):
+        async def assets(request):
             if (g := d._guard("assets")):
                 return g
+            if request.method == "GET":
+                d.calls.append((request.method, request.url.path, dict(request.query_params)))
+                return JSONResponse(load_sample("assets"))
             await d._body(request, "AssetCreate")
             return JSONResponse(load_sample("asset"), status_code=201)
 
@@ -232,7 +235,7 @@ class ContractDouble:
             Route("/teacher/videos/search", sample_get("videos", "video_search", ("q",)), methods=["GET"]),
             Route("/teacher/videos/generate", video_generate, methods=["POST"]),
             Route("/teacher/videos/generate/{task_id}", video_status, methods=["GET"]),
-            Route("/teacher/assets", asset_create, methods=["POST"]),
+            Route("/teacher/assets", assets, methods=["GET", "POST"]),
             Route("/teacher/assets/{asset_id}/file", asset_file, methods=["GET"]),
             Route("/teacher/avatar", avatar, methods=["POST"]),
             Route("/teacher/avatar/{teacher_id}", avatar, methods=["GET"]),

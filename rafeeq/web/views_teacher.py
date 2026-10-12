@@ -369,15 +369,37 @@ async def studio_asset_save(request: Request):
     return notice(request, tr(request, "library.saved"), "success")
 
 
+LIBRARY_KINDS = ("pptx", "code", "quiz", "image", "source_video", "generated_video", "audio")
+
+
+async def library_page(request: Request):
+    """My Library: everything this teacher saved or generated, with filters by type and room."""
+    user = require_user(request, "teacher")
+    kind = request.query_params.get("kind", "")
+    kind = kind if kind in LIBRARY_KINDS else ""
+    room_filter = request.query_params.get("room", "")[:60]
+    params = {k: v for k, v in {"kind": kind, "room_id": room_filter}.items() if v}
+    assets_res, rooms_res = await gather(api(request).get("/teacher/assets", token=user["token"], params=params, timeout=60),
+                                         api(request).get("/rooms", token=user["token"]))
+    ensure_session(request, assets_res)
+    ensure_session(request, rooms_res)
+    rooms = rooms_res.get("rooms", [])
+    return render(request, "library.html", res=assets_res, assets=assets_res.get("assets", []), rooms=rooms, room=None,
+                  tab="library", kind=kind, room_filter=room_filter, kinds=LIBRARY_KINDS,
+                  room_names={r["room_id"]: r["name"] for r in rooms})
+
+
 async def asset_file(request: Request):
-    """Streams one of the teacher's stored files (a generated video) to the browser."""
+    """Streams one of the teacher's stored files to the browser (?download=1 saves it instead of showing it)."""
     user = require_user(request, "teacher")
     res = await api(request).get(f"/teacher/assets/{quote(request.path_params['asset_id'], safe='')}/file",
                                  token=user["token"], timeout=60)
     if not res.ok:
         raise HTTPException(status_code=404, detail="asset")
-    return Response(res.content, media_type=res.headers.get("content-type", "application/octet-stream"),
-                    headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+    headers = {"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"}
+    if request.query_params.get("download"):
+        headers["Content-Disposition"] = res.headers.get("content-disposition", "attachment")
+    return Response(res.content, media_type=res.headers.get("content-type", "application/octet-stream"), headers=headers)
 
 
 # ---------------------------------------------------------------- profile

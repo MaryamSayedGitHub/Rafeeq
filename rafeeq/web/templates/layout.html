@@ -27,7 +27,7 @@
 
 <aside class="sidebar" aria-label="{{ t('nav.rooms') }}">
   <nav class="side-nav">
-    <a class="nav-link {% if not room and tab != 'profile' %}active{% endif %}" href="{{ u('/rooms') }}">{{ icon('door') }}<span>{{ t('nav.rooms') }}</span></a>
+    <a class="nav-link {% if not room and tab not in ('profile', 'library') %}active{% endif %}" href="{{ u('/rooms') }}">{{ icon('door') }}<span>{{ t('nav.rooms') }}</span></a>
   </nav>
   {% if room %}
   <div class="side-label">{{ t('nav.this_room') }}</div>
@@ -48,6 +48,7 @@
   {% endif %}
   {% if user.role == 'teacher' %}
   <nav class="side-nav side-bottom">
+    <a class="nav-link {% if tab == 'library' %}active{% endif %}" href="{{ u('/library') }}" {% if tab == 'library' %}aria-current="page"{% endif %}>{{ icon('folder') }}<span>{{ t('nav.library') }}</span></a>
     <a class="nav-link {% if tab == 'profile' %}active{% endif %}" href="{{ u('/profile') }}">{{ icon('settings') }}<span>{{ t('nav.profile') }}</span></a>
   </nav>
   {% endif %}

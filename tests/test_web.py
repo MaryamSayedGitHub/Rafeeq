@@ -399,6 +399,49 @@ def test_a_saved_generated_video_is_played_from_the_library(env):
     assert file.status_code == 200 and file.content == b"MP4-BYTES" and file.headers["content-type"] == "video/mp4"
 
 
+def test_library_page_lists_the_teachers_assets(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    page = t.get("/app/library")
+    assert page.status_code == 200 and "مكتبتي" in page.text
+    samples = load_sample("assets")["assets"]
+    video = next(a for a in samples if a["kind"] == "generated_video")
+    moment = next(a for a in samples if a["kind"] == "source_video")
+    assert video["title"] in page.text and moment["title"] in page.text
+    assert f"/app/assets/{video['asset_id']}/file" in page.text and "<video" in page.text      # plays our own copy
+    escaped = moment["source_url"].replace("&", "&amp;")                                       # HTML-escaped in href
+    assert escaped in page.text and 'rel="noopener noreferrer"' in page.text                   # opens YouTube
+    assert "01:15" in page.text                                                                # 75 s -> 01:15
+    assert f"/app/assets/{video['asset_id']}/file?download=1" in page.text
+
+
+def test_library_filters_are_sent_to_the_api_and_junk_is_dropped(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    t.get(f"/app/library?kind=generated_video&room={room_id}")
+    sent = [c[2] for c in double.calls if c[0] == "GET" and c[1] == "/teacher/assets"][-1]
+    assert sent == {"kind": "generated_video", "room_id": room_id}
+    t.get("/app/library?kind=%3Cscript%3E")
+    sent = [c[2] for c in double.calls if c[0] == "GET" and c[1] == "/teacher/assets"][-1]
+    assert "kind" not in sent
+
+
+def test_library_is_for_teachers_and_linked_from_the_sidebar(env):
+    app, _ = env
+    t, room_id, code = teacher_with_room(app)
+    assert 'href="/app/library"' in t.get("/app/profile").text
+    s, _ = student_in_room(app, code)
+    assert s.get("/app/library", follow_redirects=False).status_code == 403
+    assert s.get("/app/assets/a_77aa10cd/file", follow_redirects=False).status_code == 403
+
+
+def test_library_says_when_the_api_is_not_there():
+    app, _ = make_app(disabled={"assets"})
+    t, _, _ = teacher_with_room(app)
+    page = t.get("/app/library")
+    assert page.status_code == 200 and "<video" not in page.text
+
+
 def test_teacher_saves_a_presenter_image_on_the_profile(env):
     app, _ = env
     t, _, _ = teacher_with_room(app)

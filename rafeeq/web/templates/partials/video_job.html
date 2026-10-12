@@ -11,7 +11,7 @@
   <h3 class="small">{{ t('video.done') }}</h3>
   {% if prompt %}<p class="muted small" dir="auto">{{ prompt }}</p>{% endif %}
   <video class="video-player" controls preload="metadata" src="{{ job.video_url }}"></video>
-  <p class="help">{{ t('video.expires') }}</p>
+  <p class="help">{{ t('video.saved') if saved else t('video.expires') }}</p>
   <a class="btn btn-secondary btn-sm" href="{{ job.video_url }}" download target="_blank" rel="noopener">{{ icon('download', 16) }}<span>{{ t('video.download') }}</span></a>
 </div>
 {% else %}

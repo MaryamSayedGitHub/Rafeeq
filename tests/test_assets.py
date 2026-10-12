@@ -111,3 +111,22 @@ def test_asset_file_is_none_when_missing_or_external(store):
     gone = assets.register_asset(store, "u_mona", kind="pptx", title="d", origin="ai_generated",
                                  storage_root="sessions", storage_ref="s1/deck.pptx")
     assert assets.asset_file(gone) is None
+
+
+def test_session_files_are_registered_once(store):
+    files = ["deck.pptx", "examples.py", "quiz.json", "quiz.md", "notes.txt"]
+    first = assets.register_session_files(store, "u_mona", "s1", files, topic="Cells", room_id="r1")
+    assert sorted(a["kind"] for a in first) == ["code", "pptx", "quiz", "quiz"]        # notes.txt is not a library file
+    assert assets.register_session_files(store, "u_mona", "s1", files, topic="Cells", room_id="r1") == []
+    deck = assets.list_assets(store, "u_mona", kind="pptx")[0]
+    assert deck["storage_root"] == "sessions" and deck["storage_ref"] == "s1/deck.pptx" and deck["room_id"] == "r1"
+
+
+def test_find_by_task_and_stale_pending(store):
+    a = assets.register_asset(store, "u_mona", kind="generated_video", title="v", origin="ai_generated",
+                              status="pending", settings_used={"task_id": "t-1"})
+    assert assets.find_by_task(store, "u_mona", "t-1")["asset_id"] == a["asset_id"]
+    assert assets.find_by_task(store, "u_other", "t-1") is None
+    assert not assets.is_stale_pending(a)
+    assert assets.is_stale_pending({**a, "created_at": "2020-01-01T00:00:00+00:00"})
+    assert not assets.is_stale_pending({**a, "status": "ready", "created_at": "2020-01-01T00:00:00+00:00"})

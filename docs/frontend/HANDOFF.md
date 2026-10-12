@@ -223,3 +223,19 @@ Video discovery over approved lessons' slide notes (Lab 4, `lecturer/video_disco
 
 New environment variables: see `.env.example` (`DASHSCOPE_API_KEY`, `QWEN_BASE_URL`, `WAN_T2V_MODEL`, `WAN_I2V_MODEL`).
 Also fixed: `.gitignore` had been saved as UTF-16 so `storage/` was never ignored, and `storage/platform/platform.json` (demo accounts and tokens) had been committed. It is no longer tracked.
+
+### Teacher library (assets) — phases 1-3
+
+One record per saved or generated item, owned by one teacher. Records are in the same LangGraph store as the profile (`("lecturer", <id>, "assets")`), files stay on disk (`outputs/teacher/<session>/…` for Lesson Studio files, `outputs/assets/<teacher>/<asset_id>/…` for videos; `TEACHER_ASSET_DIR` changes the second). Code: `rafeeq/teacher/assets.py`. No database migration.
+
+| What | How it reaches the library |
+|---|---|
+| `.pptx`, code, quiz files of an approved session | `final_agent` registers them (`origin: ai_generated`). Sessions finished earlier are added the first time `GET /teacher/assets` is called |
+| Animated video | `POST /teacher/videos/generate` (with the teacher token) creates a `pending` asset. A repeat of the same request returns the same job (no second payment). When the job succeeds, the clip is downloaded and kept (`file_url`); the provider link would expire after 24 h |
+| YouTube moment | "احفظ هذه اللحظة في مكتبتي" -> `POST /teacher/assets` (`origin: external`) |
+
+API (Bearer token of a teacher is always required): `GET /teacher/assets`, `POST /teacher/assets`, `GET /teacher/assets/{id}`, `GET /teacher/assets/{id}/file`. `/app` plays saved videos from `GET /app/assets/{id}/file`.
+
+Authorization: `/teacher/*` routes now check the Bearer token when one is sent (another teacher's `teacher_id` -> 403). Without the header they behave as before (old `/teacher` pages). Still open: `GET /teacher/sessions/{id}` and its decision route do not check who owns the session.
+
+Not built yet: the Library page, picking assets inside Lesson Studio, Presentation Studio, Media Studio, publishing to students.

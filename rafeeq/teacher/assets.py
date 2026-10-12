@@ -90,6 +90,32 @@ def list_assets(store, teacher_id: str, kind: str = "", room_id: str = "", sessi
     return sorted(found, key=lambda a: (a.get("created_at", ""), a["asset_id"]), reverse=True)
 
 
+def find_by_key(store, teacher_id: str, idempotency_key: str) -> dict | None:
+    """The asset registered with this idempotency key, if any."""
+    if not idempotency_key:
+        return None
+    return next((a for a in _all(store, teacher_id) if a.get("idempotency_key") == idempotency_key), None)
+
+
+def find_by_task(store, teacher_id: str, task_id: str) -> dict | None:
+    """The generated-video asset whose provider job is task_id."""
+    if not task_id:
+        return None
+    return next((a for a in _all(store, teacher_id)
+                 if (a.get("settings") or {}).get("task_id") == task_id), None)
+
+
+def is_stale_pending(asset: dict, minutes: int = 30) -> bool:
+    """A job that has been 'pending' for too long is treated as lost: a retry may start a new one."""
+    if asset.get("status") != "pending":
+        return False
+    try:
+        started = datetime.fromisoformat(asset["created_at"])
+    except (KeyError, ValueError):
+        return True
+    return (datetime.now(timezone.utc) - started).total_seconds() > minutes * 60
+
+
 # ------------------------------------------------------------------ write
 def register_asset(store, teacher_id: str, *, kind: str, title: str, origin: str,
                    storage_root: str = "", storage_ref: str = "", source_url: str = "",
@@ -175,6 +201,57 @@ def new_version(store, teacher_id: str, parent_id: str, **overrides) -> dict | N
     fields.update(overrides)
     return register_asset(store, teacher_id, parent_asset_id=parent_id,
                           version=parent["version"] + 1, **fields)
+
+
+# ------------------------------------------------------------------ Lesson Studio files
+def session_file_kind(name: str) -> str:
+    """Which asset kind a file made by a Lesson Studio session is ('' = not a library file)."""
+    low = name.lower()
+    if low.endswith(".pptx"):
+        return "pptx"
+    if low.startswith("quiz") and low.endswith((".json", ".md")):
+        return "quiz"
+    if low.startswith("examples."):
+        return "code"
+    return ""
+
+
+def register_session_files(store, teacher_id: str, session_id: str, files: list[str], topic: str = "",
+                           room_id: str = "", existing_keys: set | None = None, must_exist: bool = False) -> list[dict]:
+    """Add the files of a finished session to the library (ai_generated, ready). Safe to repeat:
+    a file already registered is skipped. must_exist=True skips files that are gone from disk."""
+    keys = existing_keys if existing_keys is not None else {a.get("idempotency_key") for a in _all(store, teacher_id)}
+    added = []
+    for name in files:
+        kind = session_file_kind(name)
+        key = f"session:{session_id}:{name}"
+        if not kind or key in keys:
+            continue
+        if must_exist and not (settings.OUTPUT_DIR / session_id / name).is_file():
+            continue
+        added.append(register_asset(
+            store, teacher_id, kind=kind, title=f"{topic or session_id} - {name}", origin="ai_generated",
+            storage_root="sessions", storage_ref=f"{session_id}/{name}", session_id=session_id,
+            room_id=room_id, idempotency_key=key))
+        keys.add(key)
+    return added
+
+
+def backfill_sessions(store, teacher_id: str) -> int:
+    """Register the files of sessions finished BEFORE the library existed. Idempotent and read-only
+    for everything else. Returns how many assets were added."""
+    from rafeeq.teacher.lecturer.long_term_store import list_sessions
+    from rafeeq.teacher.lecturer.nodes.export import slugify
+
+    if store is None or not teacher_id:
+        return 0
+    keys = {a.get("idempotency_key") for a in _all(store, teacher_id)}
+    count = 0
+    for sess in list_sessions(store, teacher_id):
+        count += len(register_session_files(
+            store, teacher_id, slugify(sess["session_id"]), sess.get("files", []), topic=sess.get("topic") or "",
+            room_id=sess.get("room_id") or "", existing_keys=keys, must_exist=True))
+    return count
 
 
 # ------------------------------------------------------------------ files

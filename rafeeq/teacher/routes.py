@@ -20,6 +20,7 @@ Pages (Jinja2 + HTMX, Arabic, right-to-left):
     GET  /teacher/ui/sessions/{id}      the review panel as a full page (after a reload)
 """
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Annotated, Literal
@@ -214,8 +215,15 @@ async def _read_image(image: UploadFile | None) -> tuple[bytes | None, str]:
     return data, image.filename
 
 
+def _video_key(prompt: str, duration: int, audio: bool, image: bytes | None) -> str:
+    """Same teacher + same scene + same settings = same key, so a double click or a retry never pays twice."""
+    digest = hashlib.sha1(f"{prompt.strip()}|{duration}|{audio}".encode() + (image or b"")).hexdigest()[:16]
+    return f"video:{digest}"
+
+
 @router.post("/teacher/videos/generate")
 async def generate_video_api(
+    svc: Service,
     authorization: Auth = None,
     teacher_id: str = Form(""),
     prompt: str = Form(..., min_length=3, max_length=800),
@@ -224,23 +232,76 @@ async def generate_video_api(
     image: UploadFile | None = File(None),
 ):
     """Start an animated video (Lab 5). Without an image, the teacher's saved presenter image is the
-    first frame if there is one, otherwise it is text-to-video. Paid and async: poll the status route."""
+    first frame if there is one, otherwise it is text-to-video. Paid and async: poll the status route.
+
+    With a teacher token the job is also saved in the library (asset_id in the answer): a repeat of the
+    same request returns the same job instead of paying twice, and the finished clip is kept on our disk."""
     teacher_id = teacher_for(authorization, teacher_id)
     image_bytes, image_name = await _read_image(image)
     used_avatar = False
     if image_bytes is None and (avatar := _avatar_file(teacher_id)) is not None:
         image_bytes, image_name, used_avatar = avatar.read_bytes(), avatar.name, True
+
+    duration = max(2, min(duration, video_gen.MAX_DURATION_SECONDS))
+    asset, key = None, ""
+    if authorization:
+        key = _video_key(prompt, duration, audio, image_bytes)
+        asset = asset_lib.find_by_key(svc.store, teacher_id, key)
+        if asset and asset["status"] in ("ready", "pending") and not asset_lib.is_stale_pending(asset):
+            return {"task_id": asset["settings"].get("task_id", ""), "model": asset.get("model", ""),
+                    "used_avatar": used_avatar, "asset_id": asset["asset_id"]}
+
     result = video_gen.submit_task(prompt.strip(), image_bytes, image_name, duration=duration, audio=audio)
     if not result["ok"]:
         status = 503 if "DASHSCOPE_API_KEY" in result["error"] else 502
         raise HTTPException(status, f"Video generation could not start: {result['error']}")
-    return {"task_id": result["task_id"], "model": result["model"], "used_avatar": used_avatar}
+
+    answer = {"task_id": result["task_id"], "model": result["model"], "used_avatar": used_avatar}
+    if authorization:
+        used = {"task_id": result["task_id"], "prompt": prompt.strip(), "duration": duration, "audio": audio,
+                "used_avatar": used_avatar}
+        if asset:  # a failed or lost job: reuse the record for the new attempt
+            asset = asset_lib.update_asset(svc.store, teacher_id, asset["asset_id"], status="pending",
+                                           error="", settings=used)
+        else:
+            asset = asset_lib.register_asset(
+                svc.store, teacher_id, kind="generated_video", title=prompt.strip()[:80], origin="ai_generated",
+                provider="qwencloud", model=result["model"], settings_used=used, status="pending",
+                idempotency_key=key)
+        answer["asset_id"] = asset["asset_id"]
+    return answer
 
 
 @router.get("/teacher/videos/generate/{task_id}")
-def video_status_api(task_id: str):
-    """status: PENDING / RUNNING / SUCCEEDED / FAILED / ERROR. video_url only when SUCCEEDED (valid 24 h)."""
-    return video_gen.poll_task(task_id)
+def video_status_api(svc: Service, task_id: str, authorization: Auth = None):
+    """status: PENDING / RUNNING / SUCCEEDED / FAILED / ERROR. video_url only when SUCCEEDED (valid 24 h).
+    With a teacher token: asset_id, and file_url once the clip is saved in the library."""
+    owner = teacher_for(authorization, "") if authorization else ""
+    asset = asset_lib.find_by_task(svc.store, owner, task_id) if owner else None
+
+    if asset and asset["status"] == "ready" and asset_lib.asset_file(asset):
+        return {"status": "SUCCEEDED", "video_url": None, "error": None,
+                "asset_id": asset["asset_id"], "file_url": f"/teacher/assets/{asset['asset_id']}/file"}
+
+    result = video_gen.poll_task(task_id)
+    if asset is None:
+        return result
+    result = {**result, "asset_id": asset["asset_id"]}
+
+    if result["status"] == "SUCCEEDED" and result["video_url"]:
+        try:
+            root, ref = asset_lib.save_file(owner, asset["asset_id"], video_gen.download_video(result["video_url"]),
+                                            "video.mp4")
+            asset_lib.update_asset(svc.store, owner, asset["asset_id"], status="ready", storage_root=root,
+                                   storage_ref=ref, error="")
+            result["file_url"] = f"/teacher/assets/{asset['asset_id']}/file"
+        except Exception as e:  # keep the provider link (24 h); the library record says what happened
+            log.warning("could not save the generated video: %s: %s", type(e).__name__, str(e)[:200])
+            asset_lib.update_asset(svc.store, owner, asset["asset_id"], status="failed",
+                                   error=f"The clip could not be saved: {str(e)[:150]}")
+    elif result["status"] in ("FAILED", "CANCELED"):
+        asset_lib.update_asset(svc.store, owner, asset["asset_id"], status="failed", error=(result["error"] or "")[:300])
+    return result
 
 
 @router.post("/teacher/avatar")
@@ -300,6 +361,7 @@ def asset_view(a: dict) -> dict:
 def list_assets_api(svc: Service, authorization: Auth = None, kind: str = "", room_id: str = "",
                     session_id: str = "", status: str = ""):
     owner = _owner(authorization)
+    asset_lib.backfill_sessions(svc.store, owner)  # sessions finished before the library existed (idempotent)
     found = asset_lib.list_assets(svc.store, owner, kind=kind, room_id=room_id, session_id=session_id, status=status)
     return {"assets": [asset_view(a) for a in found]}
 

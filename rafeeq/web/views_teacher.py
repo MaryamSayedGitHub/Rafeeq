@@ -8,7 +8,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from rafeeq.web import api as A
-from rafeeq.web.common import (api, api_message, check_csrf, flash, notice, redirect, render, require_user, tr)
+from rafeeq.web.common import (api, api_message, check_csrf, flash, notice, redirect, render, require_user, tr, url as u)
 from rafeeq.web.views_rooms import ensure_session, gather, load_room, topic_names
 
 LEVELS = ("beginner", "intermediate", "advanced")
@@ -309,7 +309,7 @@ async def studio_video_search(request: Request):
     ensure_session(request, res)
     if not res.ok:
         return notice(request, api_message(request, res), "warning")
-    return render(request, "partials/video_results.html", query=q, results=res.data.get("results", []))
+    return render(request, "partials/video_results.html", room=room, query=q, results=res.data.get("results", []))
 
 
 async def studio_video_generate(request: Request):
@@ -339,9 +339,45 @@ async def studio_video_status(request: Request):
     task_id = request.path_params["task_id"]
     res = await api(request).get(f"/teacher/videos/generate/{quote(task_id, safe='')}", token=user["token"], timeout=30)
     ensure_session(request, res)
-    job = res.data if res.ok else {"status": "ERROR", "video_url": None, "error": api_message(request, res)}
+    job = dict(res.data) if res.ok else {"status": "ERROR", "video_url": None, "error": api_message(request, res)}
+    saved = bool(job.get("file_url") and job.get("asset_id"))
+    if saved:  # play our own copy through /app (the browser has no API token); it does not expire
+        job["video_url"] = u(request, f"/assets/{quote(job['asset_id'], safe='')}/file")
     return render(request, "partials/video_job.html", room=room, task_id=task_id, job=job,
-                  used_avatar=False, prompt=request.query_params.get("prompt", "")[:800])
+                  used_avatar=False, prompt=request.query_params.get("prompt", "")[:800], saved=saved)
+
+
+async def studio_asset_save(request: Request):
+    """'Save to library' on a YouTube result: the video moment becomes an asset of this teacher."""
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    form = await check_csrf(request)
+
+    def number(name):
+        try:
+            return max(0.0, float(form.get(name)))
+        except (TypeError, ValueError):
+            return None
+
+    body = {"title": str(form.get("title", "")).strip()[:200], "source_url": str(form.get("source_url", "")).strip()[:500],
+            "start_sec": number("start_sec"), "end_sec": number("end_sec"), "room_id": room["room_id"]}
+    if not body["title"] or not body["source_url"]:
+        return notice(request, tr(request, "library.bad_item"), "warning")
+    res = await api(request).post("/teacher/assets", token=user["token"], json=body)
+    ensure_session(request, res)
+    if not res.ok:
+        return notice(request, api_message(request, res), "warning")
+    return notice(request, tr(request, "library.saved"), "success")
+
+
+async def asset_file(request: Request):
+    """Streams one of the teacher's stored files (a generated video) to the browser."""
+    user = require_user(request, "teacher")
+    res = await api(request).get(f"/teacher/assets/{quote(request.path_params['asset_id'], safe='')}/file",
+                                 token=user["token"], timeout=60)
+    if not res.ok:
+        raise HTTPException(status_code=404, detail="asset")
+    return Response(res.content, media_type=res.headers.get("content-type", "application/octet-stream"),
+                    headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 
 # ---------------------------------------------------------------- profile

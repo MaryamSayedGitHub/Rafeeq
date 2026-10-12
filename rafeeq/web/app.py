@@ -64,6 +64,8 @@ def _routes() -> list:
         R(room + "/studio/videos/search", teacher.studio_video_search, methods=["POST"]),
         R(room + "/studio/videos/generate", teacher.studio_video_generate, methods=["POST"]),
         R(room + "/studio/videos/generate/{task_id}", teacher.studio_video_status, methods=["GET"]),
+        R(room + "/studio/assets", teacher.studio_asset_save, methods=["POST"]),
+        R("/assets/{asset_id}/file", teacher.asset_file, methods=["GET"]),
         R("/profile", teacher.profile_page, methods=["GET"]),
         R("/profile", teacher.profile_save, methods=["POST"]),
         R("/profile/avatar", teacher.profile_avatar, methods=["GET"]),

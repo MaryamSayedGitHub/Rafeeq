@@ -149,3 +149,23 @@ def poll_task(task_id: str) -> dict:
         "video_url": output.get("video_url"),
         "error": output.get("message") if status in ("FAILED", "ERROR") else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — keep the clip: the provider's link works for 24 hours only
+# ---------------------------------------------------------------------------
+MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+
+
+def download_video(url: str) -> bytes:
+    """Fetch the finished clip so it can be saved in the teacher's library. Raises on any problem
+    (not https, too big, network error): the caller keeps the provider link in that case."""
+    if not url.lower().startswith("https://"):
+        raise ValueError("Only https video links are downloaded")
+    with urllib.request.urlopen(url, timeout=120) as resp:
+        data = resp.read(MAX_DOWNLOAD_BYTES + 1)
+    if len(data) > MAX_DOWNLOAD_BYTES:
+        raise ValueError("The video is larger than 100 MB")
+    if not data:
+        raise ValueError("The video download was empty")
+    return data

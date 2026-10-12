@@ -32,6 +32,7 @@ class ContractDouble:
     def __init__(self, disabled: set[str] | None = None):
         self.disabled = disabled or set()   # route keys that answer 404 (not implemented yet)
         self.violations: list[str] = []
+        self.video_saved = False            # True: the status route reports the clip as saved in the library
         self.calls: list[tuple[str, str, object]] = []
         self.app = Starlette(routes=self._routes())
 
@@ -171,6 +172,25 @@ class ContractDouble:
                 d.violations.append("POST /teacher/videos/generate: prompt missing")
             return JSONResponse({**load_sample("video_job"), "used_avatar": form.get("image") is None})
 
+        async def video_status(request):
+            if (g := d._guard("videos")):
+                return g
+            data = load_sample("video_job_status")
+            if d.video_saved:
+                data = {**data, "asset_id": "a_77aa10cd", "file_url": "/teacher/assets/a_77aa10cd/file"}
+            return JSONResponse(data)
+
+        async def asset_create(request):
+            if (g := d._guard("assets")):
+                return g
+            await d._body(request, "AssetCreate")
+            return JSONResponse(load_sample("asset"), status_code=201)
+
+        async def asset_file(request):
+            if (g := d._guard("assets")):
+                return g
+            return Response(b"MP4-BYTES", media_type="video/mp4")
+
         async def avatar(request):
             if (g := d._guard("profile")):
                 return g
@@ -211,7 +231,9 @@ class ContractDouble:
             Route("/teacher/sessions/{sid}/files/{name}", session_file, methods=["GET"]),
             Route("/teacher/videos/search", sample_get("videos", "video_search", ("q",)), methods=["GET"]),
             Route("/teacher/videos/generate", video_generate, methods=["POST"]),
-            Route("/teacher/videos/generate/{task_id}", sample_get("videos", "video_job_status"), methods=["GET"]),
+            Route("/teacher/videos/generate/{task_id}", video_status, methods=["GET"]),
+            Route("/teacher/assets", asset_create, methods=["POST"]),
+            Route("/teacher/assets/{asset_id}/file", asset_file, methods=["GET"]),
             Route("/teacher/avatar", avatar, methods=["POST"]),
             Route("/teacher/avatar/{teacher_id}", avatar, methods=["GET"]),
         ] + [

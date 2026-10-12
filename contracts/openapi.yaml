@@ -1338,6 +1338,7 @@ components:
         task_id: { type: string }
         model: { type: string }
         used_avatar: { type: boolean, description: "true if the saved presenter image was the first frame" }
+        asset_id: { type: string, description: "Library record of this job; only with a teacher token. A repeat of the same request returns the same job." }
 
     VideoJobStatus:
       type: object
@@ -1347,6 +1348,8 @@ components:
         status: { type: string, enum: [PENDING, RUNNING, SUCCEEDED, FAILED, ERROR, UNKNOWN, CANCELED] }
         video_url: { type: [string, "null"], description: "only when SUCCEEDED; valid for 24 hours" }
         error: { type: [string, "null"] }
+        asset_id: { type: string, description: "Library record of this job; only with a teacher token" }
+        file_url: { type: [string, "null"], description: "Set once the clip is saved on our server; it does not expire like video_url" }
 
     AvatarSaved:
       type: object

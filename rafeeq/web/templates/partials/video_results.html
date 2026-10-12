@@ -10,6 +10,15 @@
     <span class="muted small" data-video-now aria-live="polite"></span>
     <button class="btn btn-secondary btn-sm" type="button" data-video-next><span>{{ t('video.next') }}</span>{{ icon('chevron', 16, 'flip') }}</button>
   </div>
+  <form class="video-save" hx-post="{{ u('/rooms/' ~ room.room_id ~ '/studio/assets') }}" hx-target="#video-save-note" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="title" data-save-title>
+    <input type="hidden" name="source_url" data-save-url>
+    <input type="hidden" name="start_sec" data-save-start>
+    <input type="hidden" name="end_sec" data-save-end>
+    <button class="btn btn-secondary btn-sm" type="submit">{{ icon('folder', 16) }}<span>{{ t('video.save') }}</span></button>
+  </form>
+  <div id="video-save-note" aria-live="polite"></div>
   <p class="small" dir="auto" data-video-excerpt></p>
   <ul class="video-results">
     {% for r in results %}
@@ -39,6 +48,11 @@
     var r = results[idx];
     box.querySelector('[data-video-now]').textContent = (idx + 1) + ' / ' + results.length;
     box.querySelector('[data-video-excerpt]').textContent = r.text;
+    box.querySelector('[data-save-title]').value = r.title;
+    box.querySelector('[data-save-url]').value = 'https://www.youtube.com/watch?v=' + encodeURIComponent(r.video_id) + '&t=' + Math.floor(r.start_sec) + 's';
+    box.querySelector('[data-save-start]').value = r.start_sec;
+    box.querySelector('[data-save-end]').value = r.end_sec;
+    document.getElementById('video-save-note').innerHTML = '';
     box.querySelectorAll('.video-result').forEach(function (el, n) {
       el.classList.toggle('active', n === idx);
       el.setAttribute('aria-current', n === idx ? 'true' : 'false');

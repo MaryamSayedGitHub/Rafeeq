@@ -371,6 +371,34 @@ def test_studio_video_generation_polls_until_the_clip_is_ready(env):
     assert "اكتب وصف المشهد أولًا" in no_prompt.text
 
 
+def test_teacher_saves_a_video_moment_to_the_library(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    token = csrf_of(t.get(f"/app/rooms/{room_id}/studio").text)
+    found = t.post(f"/app/rooms/{room_id}/studio/videos/search", data={"q": "ما معنى البناء الضوئي؟"},
+                   headers={**HX, "X-CSRF-Token": token})
+    assert "data-save-url" in found.text and f"/rooms/{room_id}/studio/assets" in found.text
+    r = t.post(f"/app/rooms/{room_id}/studio/assets", headers={**HX, "X-CSRF-Token": token},
+               data={"title": "البناء الضوئي", "source_url": "https://www.youtube.com/watch?v=UPBMG5EYydo&t=92s",
+                     "start_sec": "92.4", "end_sec": "138"})
+    assert "تم الحفظ في مكتبتك" in r.text
+    sent = [c[2] for c in double.calls if c[1] == "/teacher/assets"][-1]
+    assert sent["room_id"] == room_id and sent["start_sec"] == 92.4 and sent["source_url"].startswith("https://")
+    empty = t.post(f"/app/rooms/{room_id}/studio/assets", data={"title": ""}, headers={**HX, "X-CSRF-Token": token})
+    assert "تعذّر حفظ هذا العنصر" in empty.text
+
+
+def test_a_saved_generated_video_is_played_from_the_library(env):
+    app, double = env
+    double.video_saved = True
+    t, room_id, _ = teacher_with_room(app)
+    job = load_sample("video_job")
+    done = t.get(f"/app/rooms/{room_id}/studio/videos/generate/{job['task_id']}", headers=HX)
+    assert "/app/assets/a_77aa10cd/file" in done.text and "حُفظ الفيديو في مكتبتك" in done.text
+    file = t.get("/app/assets/a_77aa10cd/file")
+    assert file.status_code == 200 and file.content == b"MP4-BYTES" and file.headers["content-type"] == "video/mp4"
+
+
 def test_teacher_saves_a_presenter_image_on_the_profile(env):
     app, _ = env
     t, _, _ = teacher_with_room(app)

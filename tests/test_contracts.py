@@ -27,6 +27,7 @@ SAMPLE_TO_SCHEMA = {
     "create_room": "CreateRoomResult",
     "room_files": "RoomFiles",
     "room_students": "RoomStudents",
+    "join_code": "JoinCode",
     "snap_result": "SnapResult",
     "copilot_reply": "CopilotReply",
     "search_material": "SearchMaterial",

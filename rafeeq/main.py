@@ -29,6 +29,8 @@ templates = Jinja2Templates(directory=WEB / "templates")
 app.include_router(platform_router)
 app.include_router(teacher_router)
 
+from rafeeq.web import install
+install(app)
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):

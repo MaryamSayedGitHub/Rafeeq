@@ -1,0 +1,19 @@
+{# Correct answers are never sent to the browser: only question text and choices. #}
+<form class="panel panel-pad quiz-form" hx-post="{{ u('/rooms/' ~ room.room_id ~ '/practice/submit') }}" hx-target="#quiz-area" tabindex="-1" data-focus-heading>
+  <input type="hidden" name="quiz_id" value="{{ quiz.quiz_id }}">
+  <input type="hidden" name="topic_id" value="{{ quiz.topic_id }}">
+  <input type="hidden" name="n" value="{{ quiz.questions | length }}">
+  {% for q in quiz.questions %}
+  {% set qi = loop.index0 %}
+  <fieldset class="quiz-q">
+    <legend><span class="quiz-n">{{ t('practice.question_n', n=loop.index) }}</span>{{ q.text }}</legend>
+    <input type="hidden" name="q_{{ qi }}" value="{{ q.text }}">
+    <div class="choices">
+      {% for c in q.choices %}
+      <label class="choice"><input type="radio" name="a_{{ qi }}" value="{{ c }}" required><span dir="auto">{{ c }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% endfor %}
+  <button class="btn btn-primary" type="submit">{{ t('practice.submit') }}</button>
+</form>

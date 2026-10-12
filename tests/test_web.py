@@ -336,6 +336,13 @@ def test_studio_generate_review_approve_download(env):
     assert f.content == b"PPTX-BYTES" and "attachment" in f.headers["content-disposition"]
 
 
+def test_studio_links_to_the_teacher_video_tools(env):
+    app, _ = env
+    t, room_id, _ = teacher_with_room(app)
+    page = t.get(f"/app/rooms/{room_id}/studio")
+    assert 'href="/teacher"' in page.text and "أدوات الفيديو" in page.text
+
+
 def test_studio_requires_topic_and_needs(env):
     app, _ = env
     t, room_id, _ = teacher_with_room(app)

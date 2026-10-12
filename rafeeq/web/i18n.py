@@ -295,6 +295,9 @@ S: dict[str, tuple[str, str]] = {
     # studio
     "studio.intro": ("حدّد الموضوع وما تحتاجه، ويجهّز المساعد مسودة تراجعها وتعدّلها قبل اعتمادها.", "Set the topic and what you need. The assistant prepares a draft that you review and adjust before approving it."),
     "studio.new": ("درس جديد", "New lesson"),
+    "studio.video_tools": ("أدوات الفيديو", "Video tools"),
+    "studio.video_tools_text": ("ابحث عن شرح بالفيديو يفتح عند اللحظة المناسبة، أو ولّد مقطعًا متحركًا من وصف أو صورة. تُفتح في لوحة المعلّم.", "Find a video explanation that opens at the right moment, or generate a short animated clip from a description or an image. Opens in the teacher dashboard."),
+    "studio.video_tools_open": ("افتح أدوات الفيديو", "Open the video tools"),
     "studio.topic": ("موضوع الدرس", "Lesson topic"),
     "studio.course": ("اسم المقرر", "Course name"),
     "studio.level": ("مستوى الطلاب", "Student level"),

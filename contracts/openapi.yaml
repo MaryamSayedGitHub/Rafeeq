@@ -1122,6 +1122,7 @@ components:
           type: array
           items: { type: string }
         bio: { type: string }
+        avatar_filename: { type: string, description: "Saved presenter image for animated videos; empty = none. Served at /teacher/avatar/{teacher_id}" }
         defaults: { $ref: "#/components/schemas/TeacherDefaults" }
 
     TeacherProfile:
@@ -1136,6 +1137,7 @@ components:
           type: array
           items: { type: string }
         bio: { type: string }
+        avatar_filename: { type: string, description: "Saved presenter image for animated videos; empty = none. Served at /teacher/avatar/{teacher_id}" }
         defaults: { $ref: "#/components/schemas/TeacherDefaults" }
         display_name: { type: string, description: "title + name, printed on every generated slide" }
         sessions_count: { type: integer, minimum: 0 }

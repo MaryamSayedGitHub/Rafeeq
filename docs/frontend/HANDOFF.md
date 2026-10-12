@@ -186,3 +186,22 @@ Remaining: proposals P1 to P10; chat history is in memory (lost on restart); dem
 is a JSON file (swap `PlatformStore` for a database later; same methods); HTMX loads from
 unpkg (vendor it into `rafeeq/web/static/` before deployment); logout does not revoke the
 token yet (P10).
+
+
+## 8. Teacher features merged from the `maryam-sayed` branch (M5)
+
+Brought into this version, unchanged unless noted. They live on the teacher dashboard at `/teacher` (not under `/app`), because they use routes that are not in `contracts/openapi.yaml`:
+
+| Feature | Where | Needs |
+|---|---|---|
+| Video discovery with timestamps (Lab 4): each approved lesson's slide notes are indexed so a question can open the video at the right moment | `rafeeq/teacher/lecturer/video_discovery.py`, `labs/lab4_video_discovery/`, hook in `nodes/final_agent.py` | Postgres + `GOOGLE_API_KEY`; never blocks a session if missing |
+| Real YouTube search + transcript jump | `lecturer/youtube_discovery.py`, `GET /teacher/videos/search`, "دوّر عن شرح بالفيديو" on the dashboard | no key; `youtube-search-python`, `youtube-transcript-api` |
+| Animated video generation (Lab 5) with a saved presenter image | `lecturer/video_gen.py`, `POST /teacher/ui/videos/generate`, avatar upload on the profile form | `DASHSCOPE_API_KEY` (paid) |
+| Text to speech (Lab 1) | `labs/lab1_tts/` | `edge-tts` / `elevenlabs` |
+| Fail-fast Postgres pool | `lecturer/memory.py` | none |
+
+`/app` Lesson studio now has a "Video tools" panel that links to `/teacher`. The two UIs keep separate sign-ins: `/teacher` identifies the teacher by its own profile cookie.
+
+Merged with a real `git merge` (her commits keep their history). Only `pyproject.toml` and `uv.lock` conflicted; `contracts/openapi.yaml` gained one optional field, `avatar_filename`, on `TeacherProfileUpdate` and `TeacherProfile`.
+New environment variables: see `.env.example` (`DASHSCOPE_API_KEY`, `QWEN_BASE_URL`, `WAN_T2V_MODEL`, `WAN_I2V_MODEL`).
+Also fixed: `.gitignore` had been saved as UTF-16 so `storage/` was never ignored, and `storage/platform/platform.json` (demo accounts and tokens) had been committed. It is no longer tracked.

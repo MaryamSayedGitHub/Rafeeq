@@ -623,6 +623,75 @@ paths:
             image/*:
               schema: { type: string, format: binary }
 
+  /teacher/assets:
+    get:
+      tags: [M5 teacher]
+      operationId: listTeacherAssets
+      summary: The teacher's library (saved and generated files, videos, video moments). Needs the teacher's Bearer token.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [pptx, code, quiz, image, source_video, generated_video, audio] } }
+        - { name: room_id, in: query, schema: { type: string } }
+        - { name: session_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, ready, failed] } }
+      responses:
+        "200":
+          description: Sample file samples/assets.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssetList" }
+        "401": { description: Not signed in as a teacher }
+    post:
+      tags: [M5 teacher]
+      operationId: createTeacherAsset
+      summary: Save an external video moment (e.g. a YouTube result) to the library. Repeating the same request returns the same asset.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssetCreate" }
+      responses:
+        "201":
+          description: Sample file samples/asset.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        "401": { description: Not signed in as a teacher }
+        "422": { description: Invalid input }
+
+  /teacher/assets/{asset_id}:
+    get:
+      tags: [M5 teacher]
+      operationId: getTeacherAsset
+      summary: One asset of this teacher. Another teacher's asset is 404.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: asset_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Sample file samples/asset.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Asset" }
+        "404": { description: No such asset }
+
+  /teacher/assets/{asset_id}/file:
+    get:
+      tags: [M5 teacher]
+      operationId: getTeacherAssetFile
+      summary: The stored file of an asset. 404 for external material or a file that is not ready.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: asset_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The file
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404": { description: No such asset or no file }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1444,3 +1513,53 @@ components:
           type: array
           description: Filled when status is done
           items: { $ref: "#/components/schemas/SessionFile" }
+
+    Asset:
+      type: object
+      additionalProperties: false
+      required: [asset_id, kind, title, origin, status, error, source_url, start_sec, end_sec, provider, model, settings,
+                 room_id, session_id, slide_index, parent_asset_id, version, file_url, created_at, updated_at]
+      properties:
+        asset_id: { type: string }
+        kind: { type: string, enum: [pptx, code, quiz, image, source_video, generated_video, audio] }
+        title: { type: string }
+        origin: { type: string, enum: [upload, external, edited, ai_generated], description: "Where it came from: provenance" }
+        status: { type: string, enum: [pending, ready, failed] }
+        error: { type: string, description: "Provider message when status is failed" }
+        source_url: { type: string, description: "External material (e.g. YouTube); empty otherwise" }
+        start_sec: { type: [number, "null"] }
+        end_sec: { type: [number, "null"] }
+        provider: { type: string, description: "AI provider for generated assets, e.g. qwencloud" }
+        model: { type: string }
+        settings: { type: object, description: "Generation settings (prompt, duration, audio ...)" }
+        room_id: { type: string }
+        session_id: { type: string }
+        slide_index: { type: [integer, "null"] }
+        parent_asset_id: { type: string, description: "Set on edited versions; the original is kept" }
+        version: { type: integer, minimum: 1 }
+        file_url: { type: [string, "null"], description: "Download route; null when there is no stored file" }
+        created_at: { type: string }
+        updated_at: { type: string }
+
+    AssetList:
+      type: object
+      additionalProperties: false
+      required: [assets]
+      properties:
+        assets:
+          type: array
+          items: { $ref: "#/components/schemas/Asset" }
+
+    AssetCreate:
+      type: object
+      additionalProperties: false
+      required: [title, source_url]
+      properties:
+        kind: { type: string, enum: [source_video], default: source_video }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        source_url: { type: string, pattern: "^https?://" }
+        start_sec: { type: [number, "null"], minimum: 0 }
+        end_sec: { type: [number, "null"], minimum: 0 }
+        room_id: { type: string }
+        session_id: { type: string }
+        slide_index: { type: [integer, "null"], minimum: 0 }

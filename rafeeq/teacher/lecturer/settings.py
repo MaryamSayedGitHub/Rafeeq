@@ -19,6 +19,10 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 AVATAR_DIR = Path(os.getenv("TEACHER_AVATAR_DIR", REPO_ROOT / "outputs" / "avatars")).resolve()
 AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 
+# Teacher library (assets): saved/generated videos, images, edited files. Ignored by git.
+ASSET_DIR = Path(os.getenv("TEACHER_ASSET_DIR", REPO_ROOT / "outputs" / "assets")).resolve()
+ASSET_DIR.mkdir(parents=True, exist_ok=True)
+
 # LLM
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

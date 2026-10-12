@@ -52,6 +52,9 @@ SAMPLE_TO_SCHEMA = {
     "video_job": "VideoJob",
     "video_job_status": "VideoJobStatus",
     "avatar_saved": "AvatarSaved",
+    "asset": "Asset",
+    "assets": "AssetList",
+    "asset_create": "AssetCreate",
 }
 
 

@@ -22,17 +22,18 @@ Pages (Jinja2 + HTMX, Arabic, right-to-left):
 
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote, unquote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from rafeeq.samples import load_sample
 from rafeeq.teacher.lecturer.controller import RevisionLimitReached, SessionNotFound, SessionNotWaiting
 from rafeeq.teacher.lecturer.long_term_store import get_profile, list_sessions, load_memory, put_profile
+from rafeeq.teacher import assets as asset_lib
 from rafeeq.teacher import class_report
 from rafeeq.teacher.lecturer import video_discovery, video_gen, youtube_discovery
 from rafeeq.teacher.lecturer.schemas import ApproveRequest as Decision
@@ -75,6 +76,34 @@ def remember_teacher(response, teacher_id: str, **options) -> None:
 class TeacherSessions(BaseModel):
     sessions: list[dict]
 
+
+
+# ----------------------------------------------------------------- who is calling
+def teacher_for(authorization: str | None, claimed_id: str = "") -> str:
+    """The teacher this request acts for.
+
+    Same convention as M1's router: no Authorization header = legacy mode (the old /teacher
+    cookie pages and sample tests), so the id the caller names is used as before. When a Bearer
+    token IS sent it must be a real teacher, and it decides who is acting: naming a different
+    teacher_id is refused (403), so one teacher cannot read or change another's profile, avatar,
+    videos or sessions through /app.
+    """
+    if not authorization:
+        return claimed_id
+    from rafeeq.platform import service as platform
+
+    token = platform.token_from_header(authorization)
+    user = platform.get_store().user_for_token(token) if token else None
+    if user is None:
+        raise HTTPException(401, "Invalid or expired token")
+    if user.get("role") != "teacher":
+        raise HTTPException(403, "Teachers only")
+    if claimed_id and claimed_id != user["user_id"]:
+        raise HTTPException(403, "You can only act for your own teacher account")
+    return user["user_id"]
+
+
+Auth = Annotated[str | None, Header()]
 
 # ----------------------------------------------------------------- shared logic
 def _profile(svc: TeacherService, teacher_id: str) -> TeacherProfile | None:
@@ -134,7 +163,8 @@ def _course_rooms() -> list[dict]:
 
 # ===================================================================== JSON API
 @router.get("/teacher/profile", response_model=TeacherProfile)
-def get_profile_api(svc: Service, teacher_id: str = Query(min_length=1)):
+def get_profile_api(svc: Service, authorization: Auth = None, teacher_id: str = Query(min_length=1)):
+    teacher_id = teacher_for(authorization, teacher_id)
     profile = _profile(svc, teacher_id)
     if profile is None:
         raise HTTPException(404, "No profile for this teacher yet")
@@ -142,12 +172,15 @@ def get_profile_api(svc: Service, teacher_id: str = Query(min_length=1)):
 
 
 @router.put("/teacher/profile", response_model=TeacherProfile)
-def put_profile_api(svc: Service, body: TeacherProfileUpdate):
+def put_profile_api(svc: Service, body: TeacherProfileUpdate, authorization: Auth = None):
+    if authorization:
+        body.teacher_id = teacher_for(authorization, body.teacher_id)
     return _profile(svc, save_profile(svc.store, body))
 
 
 @router.get("/teacher/sessions", response_model=TeacherSessions)
-def list_sessions_api(svc: Service, teacher_id: str = Query(min_length=1)):
+def list_sessions_api(svc: Service, authorization: Auth = None, teacher_id: str = Query(min_length=1)):
+    teacher_id = teacher_for(authorization, teacher_id)
     return {"sessions": _past_sessions(svc, teacher_id)}
 
 
@@ -183,6 +216,7 @@ async def _read_image(image: UploadFile | None) -> tuple[bytes | None, str]:
 
 @router.post("/teacher/videos/generate")
 async def generate_video_api(
+    authorization: Auth = None,
     teacher_id: str = Form(""),
     prompt: str = Form(..., min_length=3, max_length=800),
     duration: int = Form(5),
@@ -191,6 +225,7 @@ async def generate_video_api(
 ):
     """Start an animated video (Lab 5). Without an image, the teacher's saved presenter image is the
     first frame if there is one, otherwise it is text-to-video. Paid and async: poll the status route."""
+    teacher_id = teacher_for(authorization, teacher_id)
     image_bytes, image_name = await _read_image(image)
     used_avatar = False
     if image_bytes is None and (avatar := _avatar_file(teacher_id)) is not None:
@@ -209,8 +244,9 @@ def video_status_api(task_id: str):
 
 
 @router.post("/teacher/avatar")
-async def upload_avatar_api(svc: Service, teacher_id: str = Form(..., min_length=1), image: UploadFile = File(...)):
+async def upload_avatar_api(svc: Service, authorization: Auth = None, teacher_id: str = Form(..., min_length=1), image: UploadFile = File(...)):
     """Save the teacher's presenter image (used as the first frame of their animated videos)."""
+    teacher_id = teacher_for(authorization, teacher_id)
     data, name = await _read_image(image)
     if data is None:
         raise HTTPException(422, "No image")
@@ -224,8 +260,89 @@ async def upload_avatar_api(svc: Service, teacher_id: str = Form(..., min_length
     return {"avatar_filename": filename}
 
 
+# ===================================================================== asset library
+# The teacher's saved/generated files and videos (rafeeq/teacher/assets.py). These routes ALWAYS
+# need a teacher's Bearer token: the owner is the token, never a client-supplied id.
+class AssetCreate(BaseModel):
+    """Save an external video moment (e.g. a YouTube result) to the library."""
+
+    kind: Literal["source_video"] = "source_video"
+    title: str = Field(min_length=1, max_length=200)
+    source_url: str = Field(min_length=8, max_length=500, pattern=r"^https?://")
+    start_sec: float | None = Field(default=None, ge=0)
+    end_sec: float | None = Field(default=None, ge=0)
+    room_id: str = Field(default="", max_length=60)
+    session_id: str = Field(default="", max_length=80)
+    slide_index: int | None = Field(default=None, ge=0, le=500)
+
+
+def _owner(authorization: str | None) -> str:
+    if not authorization:
+        raise HTTPException(401, "Sign in as a teacher")
+    return teacher_for(authorization, "")
+
+
+def asset_view(a: dict) -> dict:
+    """What the API returns: no server paths, and a file_url only when a file really exists."""
+    return {
+        "asset_id": a["asset_id"], "kind": a["kind"], "title": a["title"], "origin": a["origin"],
+        "status": a["status"], "error": a.get("error", ""),
+        "source_url": a.get("source_url", ""), "start_sec": a.get("start_sec"), "end_sec": a.get("end_sec"),
+        "provider": a.get("provider", ""), "model": a.get("model", ""), "settings": a.get("settings") or {},
+        "room_id": a.get("room_id", ""), "session_id": a.get("session_id", ""), "slide_index": a.get("slide_index"),
+        "parent_asset_id": a.get("parent_asset_id", ""), "version": a.get("version", 1),
+        "file_url": f"/teacher/assets/{a['asset_id']}/file" if asset_lib.asset_file(a) else None,
+        "created_at": a.get("created_at", ""), "updated_at": a.get("updated_at", ""),
+    }
+
+
+@router.get("/teacher/assets")
+def list_assets_api(svc: Service, authorization: Auth = None, kind: str = "", room_id: str = "",
+                    session_id: str = "", status: str = ""):
+    owner = _owner(authorization)
+    found = asset_lib.list_assets(svc.store, owner, kind=kind, room_id=room_id, session_id=session_id, status=status)
+    return {"assets": [asset_view(a) for a in found]}
+
+
+@router.post("/teacher/assets", status_code=201)
+def create_asset_api(svc: Service, body: AssetCreate, authorization: Auth = None):
+    owner = _owner(authorization)
+    if body.start_sec is not None and body.end_sec is not None and body.end_sec < body.start_sec:
+        raise HTTPException(422, "end_sec must not be before start_sec")
+    key = f"external:{body.source_url}:{body.start_sec}:{body.end_sec}"
+    try:
+        asset = asset_lib.register_asset(
+            svc.store, owner, kind=body.kind, title=body.title, origin="external", source_url=body.source_url,
+            start_sec=body.start_sec, end_sec=body.end_sec, room_id=body.room_id, session_id=body.session_id,
+            slide_index=body.slide_index, idempotency_key=key)
+    except asset_lib.AssetError as e:
+        raise HTTPException(422, str(e)) from None
+    return asset_view(asset)
+
+
+@router.get("/teacher/assets/{asset_id}")
+def get_asset_api(svc: Service, asset_id: str, authorization: Auth = None):
+    asset = asset_lib.get_asset(svc.store, _owner(authorization), asset_id)
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+    return asset_view(asset)
+
+
+@router.get("/teacher/assets/{asset_id}/file")
+def get_asset_file_api(svc: Service, asset_id: str, authorization: Auth = None):
+    asset = asset_lib.get_asset(svc.store, _owner(authorization), asset_id)
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+    path = asset_lib.asset_file(asset)
+    if path is None:
+        raise HTTPException(404, "This asset has no file on the server")
+    return FileResponse(path, filename=path.name)
+
+
 @router.post("/teacher/sessions")
-def start_session_api(svc: Service, body: SessionRequest):
+def start_session_api(svc: Service, body: SessionRequest, authorization: Auth = None):
+    if authorization:
+        body.lecturer_id = teacher_for(authorization, body.lecturer_id)
     return _start(svc, body)
 
 

@@ -2,6 +2,7 @@ import logging
 
 from rafeeq.teacher.lecturer.settings import OUTPUT_DIR
 from rafeeq.teacher.lecturer.long_term_store import current_store, save_session
+from rafeeq.teacher.lecturer import video_discovery
 from rafeeq.teacher.lecturer.nodes.export import slugify, write_code_file, write_quiz_files
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,30 @@ def final_agent(state) -> dict:
 
     memory_saved = save_session(
         current_store(), brief, draft.get("outline", []), state.get("feedback_history", []), files
+    )
+
+    # Teacher library: the files of this session become assets (never fails the session).
+    try:
+        from rafeeq.teacher import assets
+
+        assets.register_session_files(current_store(), brief.get("lecturer_id", ""), session_id, files,
+                                      topic=draft.get("topic", ""), room_id=brief.get("room_id", ""))
+    except Exception as e:
+        log.warning("Could not register session files in the library: %s: %s", type(e).__name__, str(e)[:200])
+
+    # Presentation Studio: the approved slides become an editable deck (never fails the session).
+    try:
+        from rafeeq.teacher import decks
+
+        decks.create_from_draft(current_store(), brief.get("lecturer_id", ""), session_id, draft, brief)
+    except Exception as e:
+        log.warning("Could not create the editable deck: %s: %s", type(e).__name__, str(e)[:200])
+
+    # Video discovery (Lab 4): index each slide's speaker notes as a timed segment, so a
+    # student question can later jump to the exact slide that explains it. Never blocks or
+    # fails the session -- see video_discovery.index_session's own try/except.
+    video_discovery.index_session(
+        brief["lecturer_id"], session_id, draft.get("topic", ""), draft.get("slides", [])
     )
 
     return {

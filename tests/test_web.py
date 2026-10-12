@@ -336,6 +336,142 @@ def test_studio_generate_review_approve_download(env):
     assert f.content == b"PPTX-BYTES" and "attachment" in f.headers["content-disposition"]
 
 
+def test_lesson_studio_stays_focused_and_the_other_studios_have_their_own_pages(env):
+    app, _ = env
+    t, room_id, _ = teacher_with_room(app)
+    page = t.get(f"/app/rooms/{room_id}/studio")
+    assert page.status_code == 200
+    assert "ابحث عن شرح بالفيديو" not in page.text and "ولّد فيديو متحركًا" not in page.text   # moved out of the Studio
+    for path in ("/app/video", "/app/presentations", "/app/media", "/app/learning", "/app/library"):
+        assert f'href="{path}' in page.text, path                                             # one sidebar link each
+    for path, heading in (("/app/video", "اكتشاف الفيديو"), ("/app/presentations", "العروض التقديمية"),
+                          ("/app/media", "الصور والوسائط"), ("/app/learning", "منصتي التعليمية"), ("/app/library", "مكتبتي")):
+        r = t.get(path)
+        assert r.status_code == 200 and heading in r.text and 'aria-current="page"' in r.text, path
+    assert t.get("/app/studio", follow_redirects=False).headers["location"].endswith("/studio")
+
+
+def test_video_studio_search_opens_each_video_at_its_matching_second(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    page = t.get(f"/app/video?room={room_id}")
+    assert "ابحث عن شرح بالفيديو" in page.text and "Physics 11" in page.text
+    token = csrf_of(page.text)
+    out = t.post("/app/video/search", data={"q": "ما معنى البناء الضوئي؟", "room_id": room_id},
+                 headers={**HX, "X-CSRF-Token": token})
+    first = load_sample("video_search")["results"][0]
+    assert first["open_at"] in out.text and first["video_id"] in out.text
+    assert "data-video-prev" in out.text and "data-video-next" in out.text and "data-cover-id" in out.text
+    assert [c for c in double.calls if c[1] == "/teacher/videos/search"][-1][2]["q"] == "ما معنى البناء الضوئي؟"
+    short = t.post("/app/video/search", data={"q": "a"}, headers={**HX, "X-CSRF-Token": token})
+    assert "اكتب السؤال أولًا" in short.text
+
+
+def test_media_studio_video_generation_polls_until_the_clip_is_ready(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    page = t.get("/app/media")
+    assert "ولّد فيديو متحركًا" in page.text
+    token = csrf_of(page.text)
+    started = t.post("/app/media/video/generate", data={"prompt": "نبات يمتص الماء من التربة", "duration": "5"},
+                     headers={**HX, "X-CSRF-Token": token})
+    job = load_sample("video_job")
+    assert f"/media/video/generate/{job['task_id']}" in started.text and 'hx-trigger="load delay:5s"' in started.text
+    sent = [c[2] for c in double.calls if c[1] == "/teacher/videos/generate"][-1]
+    assert sent["audio"] == "false" and sent["duration"] == "5" and sent["teacher_id"].startswith("u_")
+    done = t.get(f"/app/media/video/generate/{job['task_id']}", headers=HX)
+    assert load_sample("video_job_status")["video_url"] in done.text and "<video" in done.text
+    gif = t.post("/app/media/video/generate", data={"prompt": "مشهد تعليمي بسيط"},
+                 files={"image": ("x.gif", b"GIF89a", "image/gif")}, headers={**HX, "X-CSRF-Token": token})
+    assert "JPG أو PNG أو WebP" in gif.text
+    no_prompt = t.post("/app/media/video/generate", data={"prompt": ""}, headers={**HX, "X-CSRF-Token": token})
+    assert "اكتب وصف المشهد أولًا" in no_prompt.text
+
+
+def test_teacher_saves_a_video_moment_to_the_library(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    token = csrf_of(t.get(f"/app/video?room={room_id}").text)
+    found = t.post("/app/video/search", data={"q": "ما معنى البناء الضوئي؟", "room_id": room_id},
+                   headers={**HX, "X-CSRF-Token": token})
+    assert "data-save-url" in found.text and "/app/video/moments" in found.text
+    r = t.post("/app/video/moments", headers={**HX, "X-CSRF-Token": token},
+               data={"title": "البناء الضوئي", "source_url": "https://www.youtube.com/watch?v=UPBMG5EYydo&t=92s",
+                     "start_sec": "92.4", "end_sec": "138", "room_id": room_id})
+    assert "تم الحفظ في مكتبتك" in r.text
+    sent = [c[2] for c in double.calls if c[1] == "/teacher/assets" and isinstance(c[2], dict) and "title" in c[2]][-1]
+    assert sent["room_id"] == room_id and sent["start_sec"] == 92.4 and sent["source_url"].startswith("https://")
+    empty = t.post("/app/video/moments", data={"title": ""}, headers={**HX, "X-CSRF-Token": token})
+    assert "تعذّر حفظ هذا العنصر" in empty.text
+
+
+def test_a_saved_generated_video_is_played_from_the_library(env):
+    app, double = env
+    double.video_saved = True
+    t, room_id, _ = teacher_with_room(app)
+    job = load_sample("video_job")
+    done = t.get(f"/app/media/video/generate/{job['task_id']}", headers=HX)
+    assert "/app/assets/a_77aa10cd/file" in done.text and "حُفظ الفيديو في مكتبتك" in done.text
+    assert "/app/media?asset=a_77aa10cd" in done.text                                        # edit it in the media studio
+    file = t.get("/app/assets/a_77aa10cd/file")
+    assert file.status_code == 200 and file.content == b"MP4-BYTES" and file.headers["content-type"] == "video/mp4"
+
+
+def test_library_page_lists_the_teachers_assets(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    page = t.get("/app/library")
+    assert page.status_code == 200 and "مكتبتي" in page.text
+    samples = load_sample("assets")["assets"]
+    video = next(a for a in samples if a["kind"] == "generated_video")
+    moment = next(a for a in samples if a["kind"] == "source_video")
+    assert video["title"] in page.text and moment["title"] in page.text
+    assert f"/app/assets/{video['asset_id']}/file" in page.text and "<video" in page.text      # plays our own copy
+    escaped = moment["source_url"].replace("&", "&amp;")                                       # HTML-escaped in href
+    assert escaped in page.text and 'rel="noopener noreferrer"' in page.text                   # opens YouTube
+    assert "01:15" in page.text                                                                # 75 s -> 01:15
+    assert f"/app/assets/{video['asset_id']}/file?download=1" in page.text
+
+
+def test_library_filters_are_sent_to_the_api_and_junk_is_dropped(env):
+    app, double = env
+    t, room_id, _ = teacher_with_room(app)
+    t.get(f"/app/library?kind=generated_video&room={room_id}")
+    sent = [c[2] for c in double.calls if c[0] == "GET" and c[1] == "/teacher/assets"][-1]
+    assert sent == {"kind": "generated_video", "room_id": room_id}
+    t.get("/app/library?kind=%3Cscript%3E")
+    sent = [c[2] for c in double.calls if c[0] == "GET" and c[1] == "/teacher/assets"][-1]
+    assert "kind" not in sent
+
+
+def test_library_is_for_teachers_and_linked_from_the_sidebar(env):
+    app, _ = env
+    t, room_id, code = teacher_with_room(app)
+    assert 'href="/app/library"' in t.get("/app/profile").text
+    s, _ = student_in_room(app, code)
+    assert s.get("/app/library", follow_redirects=False).status_code == 403
+    assert s.get("/app/assets/a_77aa10cd/file", follow_redirects=False).status_code == 403
+
+
+def test_library_says_when_the_api_is_not_there():
+    app, _ = make_app(disabled={"assets"})
+    t, _, _ = teacher_with_room(app)
+    page = t.get("/app/library")
+    assert page.status_code == 200 and "<video" not in page.text
+
+
+def test_teacher_saves_a_presenter_image_on_the_profile(env):
+    app, _ = env
+    t, _, _ = teacher_with_room(app)
+    page = t.get("/app/profile")
+    assert "صورة المقدّم" in page.text
+    r = t.post("/app/profile/avatar", data={"csrf_token": csrf_of(page.text)},
+               files={"image": ("me.png", b"\x89PNG-ME", "image/png")})
+    assert "تم حفظ الصورة" in r.text
+    img = t.get("/app/profile/avatar")
+    assert img.status_code == 200 and img.headers["content-type"].startswith("image/")
+
+
 def test_studio_requires_topic_and_needs(env):
     app, _ = env
     t, room_id, _ = teacher_with_room(app)

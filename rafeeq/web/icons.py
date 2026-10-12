@@ -5,6 +5,7 @@ _PATHS = {
     "plus": '<path d="M12 5v14M5 12h14"/>',
     "arrow": '<path d="M19 12H5M12 19l-7-7 7-7"/>',
     "chevron": '<path d="m15 18-6-6 6-6"/>',
+    "search": '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
     "book": '<path d="M12 7v14M3 5.5A2.5 2.5 0 0 1 5.5 3H9a3 3 0 0 1 3 3v15a3 3 0 0 0-3-3H5.5A2.5 2.5 0 0 0 3 20.5zM21 5.5A2.5 2.5 0 0 0 18.5 3H15a3 3 0 0 0-3 3v15a3 3 0 0 1 3-3h3.5a2.5 2.5 0 0 1 2.5 2.5z"/>',
     "dashboard": '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/>',
     "users": '<path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M20 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',

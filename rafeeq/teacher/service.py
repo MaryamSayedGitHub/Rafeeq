@@ -75,4 +75,10 @@ def open_teacher_service() -> Iterator[TeacherService]:
                 )
         if service is None:
             service = TeacherService(InMemorySaver(), InMemoryStore(), persistent=False)
-        yield service
+        from rafeeq.teacher import class_report
+
+        class_report.set_store(service.store)  # student questions/quiz results live in the same store
+        try:
+            yield service
+        finally:
+            class_report.set_store(None)

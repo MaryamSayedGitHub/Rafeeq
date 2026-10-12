@@ -32,6 +32,7 @@ class ContractDouble:
     def __init__(self, disabled: set[str] | None = None):
         self.disabled = disabled or set()   # route keys that answer 404 (not implemented yet)
         self.violations: list[str] = []
+        self.video_saved = False            # True: the status route reports the clip as saved in the library
         self.calls: list[tuple[str, str, object]] = []
         self.app = Starlette(routes=self._routes())
 
@@ -162,6 +163,47 @@ class ContractDouble:
                 d.violations.append("GET /teacher/profile: missing teacher_id")
             return JSONResponse(load_sample("teacher_profile"))
 
+        async def video_generate(request):
+            if (g := d._guard("videos")):
+                return g
+            form = await request.form()
+            d.calls.append((request.method, request.url.path, {k: v for k, v in form.items() if k != "image"}))
+            if len(str(form.get("prompt", ""))) < 3:
+                d.violations.append("POST /teacher/videos/generate: prompt missing")
+            return JSONResponse({**load_sample("video_job"), "used_avatar": form.get("image") is None})
+
+        async def video_status(request):
+            if (g := d._guard("videos")):
+                return g
+            data = load_sample("video_job_status")
+            if d.video_saved:
+                data = {**data, "asset_id": "a_77aa10cd", "file_url": "/teacher/assets/a_77aa10cd/file"}
+            return JSONResponse(data)
+
+        async def assets(request):
+            if (g := d._guard("assets")):
+                return g
+            if request.method == "GET":
+                d.calls.append((request.method, request.url.path, dict(request.query_params)))
+                return JSONResponse(load_sample("assets"))
+            await d._body(request, "AssetCreate")
+            return JSONResponse(load_sample("asset"), status_code=201)
+
+        async def asset_file(request):
+            if (g := d._guard("assets")):
+                return g
+            return Response(b"MP4-BYTES", media_type="video/mp4")
+
+        async def avatar(request):
+            if (g := d._guard("profile")):
+                return g
+            if request.method == "POST":
+                form = await request.form()
+                if not form.get("teacher_id") or form.get("image") is None:
+                    d.violations.append("POST /teacher/avatar: teacher_id and image are required")
+                return JSONResponse(load_sample("avatar_saved"))
+            return Response(b"\x89PNG-AVATAR", media_type="image/png")
+
         async def session_file(request):
             if (g := d._guard("sessions")):
                 return g
@@ -190,6 +232,13 @@ class ContractDouble:
             Route("/teacher/sessions", sample_get("sessions", "teacher_sessions", ("teacher_id",)), methods=["GET"]),
             Route("/teacher/sessions/{sid}", sample_get("sessions", "lecturer_session"), methods=["GET"]),
             Route("/teacher/sessions/{sid}/files/{name}", session_file, methods=["GET"]),
+            Route("/teacher/videos/search", sample_get("videos", "video_search", ("q",)), methods=["GET"]),
+            Route("/teacher/videos/generate", video_generate, methods=["POST"]),
+            Route("/teacher/videos/generate/{task_id}", video_status, methods=["GET"]),
+            Route("/teacher/assets", assets, methods=["GET", "POST"]),
+            Route("/teacher/assets/{asset_id}/file", asset_file, methods=["GET"]),
+            Route("/teacher/avatar", avatar, methods=["POST"]),
+            Route("/teacher/avatar/{teacher_id}", avatar, methods=["GET"]),
         ] + [
             Route("/teacher/sessions", sample_post("sessions", "LecturerSessionRequest", "lecturer_session"), methods=["POST"]),
             Route("/teacher/sessions/{sid}/decision", sample_post("sessions", "LecturerDecision", "lecturer_session"), methods=["POST"]),

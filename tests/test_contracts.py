@@ -48,6 +48,22 @@ SAMPLE_TO_SCHEMA = {
     "lecturer_session_request": "LecturerSessionRequest",
     "lecturer_decision": "LecturerDecision",
     "lecturer_session": "LecturerSession",
+    "video_search": "VideoSearch",
+    "video_job": "VideoJob",
+    "video_job_status": "VideoJobStatus",
+    "avatar_saved": "AvatarSaved",
+    "asset": "Asset",
+    "assets": "AssetList",
+    "asset_create": "AssetCreate",
+    "deck": "Deck",
+    "decks": "DeckList",
+    "themes": "ThemeList",
+    "course": "Course",
+    "courses": "CourseList",
+    "room_courses": "RoomCourses",
+    "media_capabilities": "MediaCapabilities",
+    "visual_job": "VisualJob",
+    "visual_status": "VisualStatus",
 }
 
 

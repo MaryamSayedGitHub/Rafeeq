@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from rafeeq.platform.router import router as platform_router
 from rafeeq.teacher.routes import router as teacher_router
+from rafeeq.teacher.studio_routes import router as studio_router
 from rafeeq.teacher.service import open_teacher_service
 from rafeeq.web.nav import NAV
 
@@ -28,6 +29,7 @@ templates = Jinja2Templates(directory=WEB / "templates")
 
 app.include_router(platform_router)
 app.include_router(teacher_router)
+app.include_router(studio_router)
 
 from rafeeq.web import install
 install(app)

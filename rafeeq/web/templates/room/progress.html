@@ -1,0 +1,57 @@
+{% extends "layout.html" %}
+{% from "macros.html" import section_state, meter %}
+{% block title %}{{ t('tab.progress') }} · {{ room.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t('tab.progress') }}</h1>
+    <p>{{ t('progress.intro') }}</p>
+  </div>
+</div>
+
+<div class="two-col">
+  <section class="panel panel-pad">
+    <h2 class="panel-title">{{ t('progress.weak') }}</h2>
+    {% if summary_res.ok %}
+      {% set weak = summary_res.data.weak_topics | sort(attribute='score') %}
+      {% if weak %}
+        <ul class="topic-rows">
+          {% for w in weak %}
+          <li>
+            <span class="topic-name">{{ topic_names.get(w.topic_id, w.topic_id) }}</span>
+            {{ meter(w.score) }}
+            <a class="btn btn-secondary btn-sm" href="{{ u('/rooms/' ~ room.room_id ~ '/practice', topic=w.topic_id) }}">{{ t('progress.practice_topic') }}</a>
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="muted">{{ t('progress.weak.empty') }}</p>
+      {% endif %}
+    {% else %}
+      {{ section_state(t, summary_res) }}
+    {% endif %}
+  </section>
+
+  <aside class="stack">
+    <section class="panel panel-pad next-card">
+      <h2 class="panel-title">{{ t('progress.next') }}</h2>
+      {% if next_res.ok %}
+        <p class="next-text">{{ next_res.data.suggestion }}</p>
+        {% if next_res.data.topic_id %}
+          <a class="btn btn-primary btn-sm" href="{{ u('/rooms/' ~ room.room_id ~ '/practice', topic=next_res.data.topic_id) }}">{{ icon('quiz', 16) }}<span>{{ t('progress.practice_topic') }}</span></a>
+        {% endif %}
+      {% else %}
+        {{ section_state(t, next_res) }}
+      {% endif %}
+    </section>
+    <section class="panel panel-pad">
+      <h2 class="panel-title">{{ t('progress.level') }}</h2>
+      {% if summary_res.ok %}
+        <p class="level-pill">{{ t('level.' ~ summary_res.data.level) }}</p>
+      {% else %}
+        {{ section_state(t, summary_res) }}
+      {% endif %}
+    </section>
+  </aside>
+</div>
+{% endblock %}

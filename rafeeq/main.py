@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from rafeeq.platform.router import router as platform_router
 from rafeeq.teacher.routes import router as teacher_router
 from rafeeq.teacher.service import open_teacher_service
 from rafeeq.web.nav import NAV
@@ -25,8 +26,11 @@ app = FastAPI(title="Rafeeq", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=WEB / "static"), name="static")
 templates = Jinja2Templates(directory=WEB / "templates")
 
+app.include_router(platform_router)
 app.include_router(teacher_router)
 
+from rafeeq.web import install
+install(app)
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):

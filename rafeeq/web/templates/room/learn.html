@@ -27,6 +27,8 @@
           {% set src = u('/rooms/' ~ room.room_id ~ '/courses/' ~ c.course_id ~ '/assets/' ~ a.asset_id ~ '/file') %}
           {% if a.kind in ('generated_video', 'video') and a.file_url %}
             <video class="video-player" controls preload="metadata" src="{{ src }}"></video>
+          {% elif a.kind == 'source_video' and yt_embed(a.source_url, a.start_sec, a.end_sec) %}
+            <iframe class="video-embed" src="{{ yt_embed(a.source_url, a.start_sec, a.end_sec) }}" title="{{ a.title }}" loading="lazy" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
           {% elif a.kind == 'image' and a.file_url %}
             <img class="asset-thumb" src="{{ src }}" alt="{{ a.title }}" loading="lazy">
           {% elif a.kind == 'audio' and a.file_url %}

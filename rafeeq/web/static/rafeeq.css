@@ -544,3 +544,15 @@ pre { margin: 0; padding: 14px; background: #192c33; color: #d5ede4; overflow-x:
   .form-grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .project-bar .input { min-inline-size: 0; flex: 1; }
 }
+
+/* M5: saved YouTube clips play only their start..end, and the clip boxes under the search player */
+.video-embed { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: var(--radius-sm); background: #000; }
+.clip-row { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin: 10px 0 4px; }
+.clip-row label { display: grid; gap: 4px; font-size: 13px; }
+.clip-row input[aria-invalid="true"] { border-color: var(--red, #b3261e); }
+
+/* M5: story video progress and its scene list */
+.video-job progress { inline-size: 100%; block-size: 8px; margin-block: 6px; accent-color: var(--blue); }
+.story-scenes { display: grid; gap: 6px; margin: 10px 0 0; padding-inline-start: 0; list-style: none; }
+.story-scene { display: flex; align-items: center; gap: 8px; }
+.story-scene.state-todo { opacity: .65; }

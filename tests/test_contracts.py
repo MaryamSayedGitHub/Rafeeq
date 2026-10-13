@@ -64,6 +64,7 @@ SAMPLE_TO_SCHEMA = {
     "media_capabilities": "MediaCapabilities",
     "visual_job": "VisualJob",
     "visual_status": "VisualStatus",
+    "story": "StoryStatus",
 }
 
 

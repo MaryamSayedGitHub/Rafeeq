@@ -4,15 +4,20 @@ saves it as a new version of the asset (the original is never overwritten).
 - Images: OpenCV (already a dependency): crop, rotate, flip, resize, brightness, contrast, grayscale.
 - Video / audio: the `ffmpeg` program. It is not a Python package: when it is not installed, these
   functions raise MediaError("ffmpeg is not installed ...") and the page says so.
-- Speech: edge-tts (Microsoft's online voices), which needs an internet connection.
+- Speech: Gemini TTS (same GOOGLE_API_KEY as the text model) first, edge-tts (Microsoft's online voices) as the
+  fallback; both need an internet connection. TTS_PROVIDER=edge|gemini forces one.
 """
 
 import asyncio
+import base64
+import os
+import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 VIDEO_EXTS = {".mp4", ".webm", ".mov"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg"}
 MAX_UPLOAD_BYTES = {"image": 15 * 1024 * 1024, "video": 150 * 1024 * 1024, "audio": 40 * 1024 * 1024}
@@ -58,6 +63,9 @@ def edit_image(data: bytes, ext: str, ops: dict) -> bytes:
     ext = ext.lower()
     if ext not in IMAGE_EXTS:
         raise MediaError("Unsupported image type")
+    if ext == ".gif":
+        raise MediaError("An animated GIF cannot be edited as a picture (it would lose its animation). "
+                         "Edit the source video and convert it to a GIF again.")
     image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise MediaError("This is not a readable image")
@@ -148,15 +156,76 @@ def edit_media(src: Path, dst_dir: Path, kind: str, ops: dict) -> Path:
 
 
 # ------------------------------------------------------------------ speech
-def synthesize_speech(text: str, voice: str, dst: Path) -> Path:
-    """Narration as an .mp3 with edge-tts. Needs internet access."""
-    text = (text or "").strip()
-    if len(text) < 2:
-        raise MediaError("Write the text to read aloud")
-    if len(text) > MAX_SPEECH_CHARS:
-        raise MediaError(f"The text is longer than {MAX_SPEECH_CHARS} characters")
-    if voice not in VOICES:
-        raise MediaError("Unknown voice")
+GEMINI_TTS_MODEL_DEFAULT = "gemini-2.5-flash-preview-tts"
+_GEMINI_VOICES = {"female": "Kore", "male": "Charon"}          # prebuilt Gemini voices; the language follows the text
+
+
+def _speech_providers() -> list[str]:
+    forced = os.getenv("TTS_PROVIDER", "").strip().lower()
+    if forced in ("edge", "gemini"):
+        return [forced]
+    return (["gemini"] if os.getenv("GOOGLE_API_KEY") else []) + ["edge"]
+
+
+def speech_available() -> bool:
+    if os.getenv("GOOGLE_API_KEY") and "gemini" in _speech_providers():
+        return True
+    try:
+        import edge_tts  # noqa: F401
+        return "edge" in _speech_providers()
+    except ImportError:
+        return False
+
+
+GEMINI_TTS_RETRIES = 3
+
+
+def _retry_after(response, default: float) -> float:
+    """Seconds Google asks us to wait ('retryDelay': '23s' in the error body), capped at one minute."""
+    try:
+        found = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', response.text)
+    except Exception:                                                         # noqa: BLE001
+        found = None
+    return min(60.0, float(found.group(1)) + 1 if found else default)
+
+
+def _gemini_speech(text: str, voice: str, dst: Path) -> Path:
+    import httpx
+
+    model = os.getenv("GEMINI_TTS_MODEL") or GEMINI_TTS_MODEL_DEFAULT
+    name = _GEMINI_VOICES["male" if "male" in VOICES[voice] and "female" not in VOICES[voice] else "female"]
+    body = {"contents": [{"parts": [{"text": "Say clearly and calmly, like a teacher: " + text}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"],
+                                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": name}}}}}
+    pcm = None
+    for attempt in range(GEMINI_TTS_RETRIES + 1):
+        try:
+            res = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                             headers={"x-goog-api-key": os.environ["GOOGLE_API_KEY"]}, json=body, timeout=120)
+            res.raise_for_status()
+            parts = res.json()["candidates"][0]["content"]["parts"]
+            pcm = base64.b64decode(next(p["inlineData"]["data"] for p in parts if "inlineData" in p))
+            break
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            if code == 429 and attempt < GEMINI_TTS_RETRIES:                    # too many requests: wait as Google asks, then try again
+                time.sleep(_retry_after(e.response, 20 * (attempt + 1)))
+                continue
+            hint = " - the voice quota is used up; wait a minute or check the quota of your key" if code == 429 else ""
+            raise MediaError(f"Gemini voice refused the request ({code}){hint}") from None
+        except Exception as e:
+            raise MediaError(f"Gemini voice failed: {type(e).__name__}") from None
+    exe = ffmpeg_path()
+    if exe is None:
+        raise MediaError("ffmpeg is not installed (needed to turn the Gemini voice into an mp3)")
+    done = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
+                           "-c:a", "libmp3lame", "-q:a", "4", str(dst)], input=pcm, capture_output=True, timeout=FFMPEG_TIMEOUT)
+    if done.returncode != 0 or not dst.is_file() or dst.stat().st_size == 0:
+        raise MediaError("The Gemini voice could not be converted to mp3")
+    return dst
+
+
+def _edge_speech(text: str, voice: str, dst: Path) -> Path:
     try:
         import edge_tts
     except ImportError:
@@ -164,7 +233,25 @@ def synthesize_speech(text: str, voice: str, dst: Path) -> Path:
     try:
         asyncio.run(edge_tts.Communicate(text=text, voice=voice).save(str(dst)))
     except Exception as e:
-        raise MediaError(f"The voice service could not be reached: {type(e).__name__}") from None
+        raise MediaError(f"The Microsoft voice service refused or could not be reached: {type(e).__name__}") from None
     if not dst.is_file() or dst.stat().st_size == 0:
         raise MediaError("The voice service returned no audio")
     return dst
+
+
+def synthesize_speech(text: str, voice: str, dst: Path) -> Path:
+    """Narration as an .mp3: Gemini TTS when GOOGLE_API_KEY is set, then edge-tts. Needs internet access."""
+    text = (text or "").strip()
+    if len(text) < 2:
+        raise MediaError("Write the text to read aloud")
+    if len(text) > MAX_SPEECH_CHARS:
+        raise MediaError(f"The text is longer than {MAX_SPEECH_CHARS} characters")
+    if voice not in VOICES:
+        raise MediaError("Unknown voice")
+    errors = []
+    for provider in _speech_providers():
+        try:
+            return (_gemini_speech if provider == "gemini" else _edge_speech)(text, voice, dst)
+        except MediaError as e:
+            errors.append(str(e))
+    raise MediaError(" / ".join(errors))

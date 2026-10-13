@@ -80,6 +80,9 @@ def _routes() -> list:
         R("/media", studios.media_page, methods=["GET"]),
         R("/media/upload", studios.media_upload, methods=["POST"]),
         R("/media/speech", studios.media_speech, methods=["POST"]),
+        R("/story", studios.story_page, methods=["GET"]),
+        R("/story", studios.story_create, methods=["POST"]),
+        R("/story/{asset_id}", studios.story_status, methods=["GET"]),
         R("/media/video/generate", studios.media_video_generate, methods=["POST"]),
         R("/media/video/generate/{task_id}", studios.media_video_status, methods=["GET"]),
         R("/media/{asset_id}/edit", studios.media_edit, methods=["POST"]),
@@ -137,7 +140,7 @@ class SecurityHeaders:
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                headers += [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"same-origin"),
+                headers += [(b"x-content-type-options", b"nosniff"), (b"referrer-policy", b"strict-origin-when-cross-origin"),
                             (b"x-frame-options", b"DENY")]
                 message["headers"] = headers
             await send(message)

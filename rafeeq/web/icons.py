@@ -2,6 +2,7 @@
 from markupsafe import Markup
 
 _PATHS = {
+    "film": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
     "arrow": '<path d="M19 12H5M12 19l-7-7 7-7"/>',
     "chevron": '<path d="m15 18-6-6 6-6"/>',

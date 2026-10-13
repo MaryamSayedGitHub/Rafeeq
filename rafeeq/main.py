@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from rafeeq.knowledge.integration import install as install_knowledge
 from rafeeq.platform.router import router as platform_router
 from rafeeq.teacher.routes import router as teacher_router
 from rafeeq.teacher.studio_routes import router as studio_router
@@ -30,6 +31,7 @@ templates = Jinja2Templates(directory=WEB / "templates")
 app.include_router(platform_router)
 app.include_router(teacher_router)
 app.include_router(studio_router)
+install_knowledge(app)  # M2: real /search, topics, sources and PDF indexing when RAFEEQ_KNOWLEDGE=1
 
 from rafeeq.web import install
 install(app)

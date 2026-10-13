@@ -85,12 +85,17 @@ def submit_task(
     duration: int = 5,
     resolution: str = "720P",
     audio: bool = False,
+    prompt_extend: bool = True,
+    seed: int | None = None,
 ) -> dict:
     """Returns {"ok": True, "task_id": ...} or {"ok": False, "error": "..."}.
 
     `audio` turns on the model's own generated sound/voice track (costs roughly
     2x more per second than silent -- see QwenCloud's pricing page). Defaults
-    to False so a first try doesn't surprise anyone with the bill."""
+    to False so a first try doesn't surprise anyone with the bill.
+
+    `prompt_extend=False` stops the provider from rewriting the prompt (it can change a character between
+    scenes); `seed` makes the result repeatable. The multi-scene story videos set both."""
     if not _api_key():
         return {"ok": False, "error": "DASHSCOPE_API_KEY is not set in .env"}
 
@@ -98,8 +103,10 @@ def submit_task(
     body: dict = {
         "input": {"prompt": prompt.strip()[:800]},
         "parameters": {"resolution": resolution, "duration": duration,
-                       "prompt_extend": True, "audio": audio},
+                       "prompt_extend": prompt_extend, "audio": audio},
     }
+    if seed is not None:
+        body["parameters"]["seed"] = int(seed)
 
     if image_bytes:
         model = DEFAULT_I2V_MODEL

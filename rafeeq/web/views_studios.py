@@ -14,10 +14,11 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from rafeeq.web import api as A
-from rafeeq.web.common import (api, api_message, check_csrf, flash, notice, redirect, render, require_user, tr, url as u)
+from rafeeq.web.common import (api, api_message, check_csrf, flash, lang_of, notice, redirect, render, require_user, tr, url as u)
 from rafeeq.web.views_rooms import ensure_session, gather, load_room
 from rafeeq.web.views_teacher import _image_part, _image_too_large, _int
 
+STORY_STYLES = ("storybook", "flat", "clay", "realistic")
 MEDIA_KINDS = ("image", "video", "generated_video", "audio")
 COURSE_SKIP_KINDS = ("theme",)
 MAX_MEDIA_BODY = {"image": 15, "video": 150, "audio": 40}
@@ -213,6 +214,8 @@ def _ops_from_form(form, kind: str) -> dict:
             ops["mute"] = True
         if form.get("extract_audio"):
             ops["extract_audio"] = True
+        if form.get("to_gif"):
+            ops["to_gif"] = True
     return ops
 
 
@@ -290,6 +293,46 @@ async def media_video_status(request: Request):
     return render(request, "partials/video_job.html", poll_base="/media/video/generate/", task_id=task_id, job=job,
                   used_avatar=False, prompt=request.query_params.get("prompt", "")[:800], saved=saved,
                   edit_url=u(request, "/media", asset=job["asset_id"]) if saved else "")
+
+
+# ------------------------------------------------------------------ Story video (several scenes, about 30 s)
+async def story_page(request: Request):
+    user = require_user(request, "teacher")
+    proj = await project(request, user)
+    assets_res, caps_res = await gather(_assets(request, user, kind="generated_video"),
+                                        api(request).get("/teacher/media/capabilities", token=user["token"]))
+    ensure_session(request, caps_res)
+    stories = [a for a in assets_res.get("assets", []) if (a.get("settings") or {}).get("story")]
+    return page(request, "studios/story.html", "story", proj, stories=stories[:8], room_names={}, caps=caps_res.data if caps_res.ok else {},
+                styles=STORY_STYLES, topic=request.query_params.get("topic", "")[:400] or (proj["session"] or {}).get("topic", ""))
+
+
+async def story_create(request: Request):
+    user = require_user(request, "teacher")
+    form = await check_csrf(request)
+    topic = str(form.get("topic", "")).strip()
+    if len(topic) < 3:
+        return notice(request, tr(request, "story.need_topic"), "warning")
+    body = {"topic": topic[:400], "scenes": _int(form.get("scenes"), 2, 8, 6), "style": str(form.get("style", "storybook"))[:20],
+            "language": lang_of(request),
+            "voice": str(form.get("voice", ""))[:60], "fade": bool(form.get("fade")), "vision": bool(form.get("vision")),
+            "room_id": str(form.get("room_id", ""))[:60], "retry": bool(form.get("retry"))}
+    res = await api(request).post("/teacher/stories", token=user["token"], json=body, timeout=180)
+    ensure_session(request, res)
+    if not res.ok:
+        key = "video.no_key" if res.status == 503 else None
+        return notice(request, tr(request, key) if key else api_message(request, res), "warning")
+    return render(request, "partials/story_job.html", job=res.data)
+
+
+async def story_status(request: Request):
+    user = require_user(request, "teacher")
+    asset_id = request.path_params["asset_id"]
+    res = await api(request).get(f"/teacher/stories/{quote(asset_id, safe='')}", token=user["token"], timeout=120)
+    ensure_session(request, res)
+    if not res.ok:
+        return notice(request, api_message(request, res), "warning")
+    return render(request, "partials/story_job.html", job=res.data)
 
 
 # ------------------------------------------------------------------ Presentation Studio

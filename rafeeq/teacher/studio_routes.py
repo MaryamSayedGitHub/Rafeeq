@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from rafeeq.teacher import assets as asset_lib
-from rafeeq.teacher import courses, decks, media_tools, themes, visuals
+from rafeeq.teacher import courses, decks, media_tools, story_video, themes, visuals
 from rafeeq.teacher.lecturer import image_gen
 from rafeeq.teacher.lecturer.long_term_store import get_profile, list_sessions
 from rafeeq.teacher.routes import Auth, Service, _owner, asset_view
@@ -340,7 +340,14 @@ def edit_media_api(svc: Service, asset_id: str, body: MediaEdit, authorization: 
     if path is None:
         raise HTTPException(409, "This item has no file to edit yet")
     try:
-        if source["kind"] == "image":
+        if body.ops.get("to_gif") and source["kind"] in ("video", "generated_video"):
+            trim = body.ops.get("trim") or {}
+            with tempfile.TemporaryDirectory() as tmp:
+                gif = story_video.to_gif(path, Path(tmp) / "clip.gif", start=float(trim.get("start") or 0),
+                                         end=float(trim["end"]) if trim.get("end") else None,
+                                         fps=int(body.ops.get("fps") or 12), width=int(body.ops.get("width") or 480))
+                data, name, kind = gif.read_bytes(), "clip.gif", "image"
+        elif source["kind"] == "image":
             data, name, kind = media_tools.edit_image(path.read_bytes(), path.suffix, body.ops), f"edited{path.suffix.lower()}", "image"
         else:
             with tempfile.TemporaryDirectory() as tmp:
@@ -348,7 +355,7 @@ def edit_media_api(svc: Service, asset_id: str, body: MediaEdit, authorization: 
                 out = media_tools.edit_media(path, Path(tmp), media_kind, body.ops)
                 data, name = out.read_bytes(), out.name
                 kind = "audio" if out.suffix == ".mp3" else "video"
-    except media_tools.MediaError as e:
+    except (media_tools.MediaError, story_video.StoryError, ValueError) as e:
         raise HTTPException(503 if "ffmpeg is not installed" in str(e) else 422, str(e)) from None
     key = "edit:" + hashlib.sha1(f"{asset_id}|{json.dumps(body.ops, sort_keys=True)}|{body.title}".encode()).hexdigest()[:24]
     new = asset_lib.register_asset(
@@ -380,6 +387,52 @@ def speech_api(svc: Service, body: SpeechRequest, authorization: Auth = None):
         asset_lib.update_asset(svc.store, owner, asset["asset_id"], status="failed", error=str(e)[:300])
         raise HTTPException(422 if "Unknown voice" in str(e) or "Write the text" in str(e) else 503, str(e)) from None
     return asset_view(asset_lib.update_asset(svc.store, owner, asset["asset_id"], status="ready", storage_root=root, storage_ref=ref))
+
+
+# ===================================================================== story videos (about 30 s, several scenes)
+class StoryCreate(BaseModel):
+    topic: str = Field(min_length=3, max_length=400)
+    scenes: int = Field(default=story_video.DEFAULT_SCENES, ge=story_video.MIN_SCENES, le=story_video.MAX_SCENES)
+    style: str = Field(default="storybook", max_length=20)
+    language: str = Field(default="ar", pattern="^(ar|en)$")
+    voice: str = Field(default="", max_length=60)
+    fade: bool = True
+    vision: bool = False
+    room_id: str = Field(default="", max_length=60)
+    retry: bool = False
+
+
+def _story_or_404(svc, owner: str, asset_id: str) -> dict:
+    a = asset_lib.get_asset(svc.store, owner, asset_id)
+    if a is None or not (a.get("settings") or {}).get("story"):
+        raise HTTPException(404, "Story not found")
+    return a
+
+
+@router.post("/teacher/stories", status_code=201)
+def create_story_api(svc: Service, body: StoryCreate, authorization: Auth = None):
+    """Plan a multi-scene video (an LLM writes the scenes) and start it. Every scene is a paid video job and
+    each one continues from the last frame of the one before. Poll GET /teacher/stories/{id}. The same
+    request returns the same story; a failed one restarts only with retry=true."""
+    owner = _owner(authorization)
+    if media_tools.ffmpeg_path() is None:
+        raise HTTPException(503, "ffmpeg is not installed on the server, so scenes cannot be joined into one video")
+    try:
+        asset = story_video.start_story(svc.store, owner, body.topic, scenes=body.scenes, style=body.style,
+                                        language=body.language, voice=body.voice, fade=body.fade, vision=body.vision,
+                                        room_id=body.room_id, retry=body.retry)
+    except story_video.StoryError as e:
+        raise HTTPException(503 if "DASHSCOPE_API_KEY" in str(e) else 422, str(e)) from None
+    return story_video.story_view(asset)
+
+
+@router.get("/teacher/stories/{asset_id}")
+def story_status_api(svc: Service, asset_id: str, authorization: Auth = None):
+    """Progress of a story. Each call also moves it one step forward (so the page only has to poll)."""
+    owner = _owner(authorization)
+    _story_or_404(svc, owner, asset_id)
+    return story_video.story_view(story_video.advance(svc.store, owner, asset_id))
+
 
 
 # ===================================================================== courses (My Learning Platform)

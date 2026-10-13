@@ -1227,6 +1227,44 @@ paths:
         "403": { description: Not in this room }
         "404": { description: Not in the published course }
 
+  /teacher/stories:
+    post:
+      tags: [M5 teacher]
+      operationId: createStory
+      summary: "Plan a multi-scene video (an LLM writes the scenes) and start it. Every scene is a paid video job that starts from the last frame of the one before; the scenes are joined with ffmpeg (optional narration). The same request returns the same story; a failed one restarts only with retry=true."
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StoryCreate" }
+      responses:
+        "201":
+          description: Sample file in samples/story.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StoryStatus" }
+        "401": { description: Not signed in as a teacher }
+        "422": { description: Invalid input or the planner returned no usable story }
+        "503": { description: DASHSCOPE_API_KEY is not set, or ffmpeg is not installed }
+
+  /teacher/stories/{asset_id}:
+    get:
+      tags: [M5 teacher]
+      operationId: getStory
+      summary: "Progress of a story. Each call also moves it one step forward, so the page only has to poll (every few seconds)."
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: asset_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Sample file in samples/story.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StoryStatus" }
+        "401": { description: Not signed in as a teacher }
+        "404": { description: Not found (or not yours) }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2299,7 +2337,7 @@ components:
         title: { type: string, maxLength: 200 }
         ops:
           type: object
-          description: "Image: crop {x,y,w,h} in percent, rotate 0|90|180|270, flip h|v|both, width px, brightness, contrast, grayscale. Video/audio: trim {start,end} seconds, mute, volume, extract_audio."
+          description: "Image: crop {x,y,w,h} in percent, rotate 0|90|180|270, flip h|v|both, width px, brightness, contrast, grayscale (not for GIFs). Video/audio: trim {start,end} seconds, mute, volume, extract_audio. Video only: to_gif (with optional trim, fps, width) makes a looping GIF image asset that can go on a slide."
           additionalProperties: true
 
     CourseLesson:
@@ -2431,3 +2469,48 @@ components:
                     title: { type: string }
                     notes: { type: string }
                     assets: { type: array, items: { $ref: "#/components/schemas/RoomCourseAsset" } }
+
+    StoryCreate:
+      type: object
+      additionalProperties: false
+      required: [topic]
+      properties:
+        topic: { type: string, minLength: 3, maxLength: 400 }
+        scenes: { type: integer, minimum: 2, maximum: 8, default: 6, description: "About 5 seconds each" }
+        style: { type: string, enum: [storybook, flat, clay, realistic], default: storybook }
+        language: { type: string, enum: [ar, en], default: ar, description: "Language of the narration" }
+        voice: { type: string, maxLength: 60, description: "An edge-tts voice from /teacher/media/capabilities; empty = no narration" }
+        fade: { type: boolean, default: true }
+        vision: { type: boolean, default: false, description: "Describe each last frame with a local vision model (Ollama) to keep the next scene consistent" }
+        room_id: { type: string, maxLength: 60 }
+        retry: { type: boolean, default: false }
+
+    StoryScene:
+      type: object
+      additionalProperties: false
+      required: [n, state, narration, visual]
+      properties:
+        n: { type: integer, minimum: 1 }
+        state: { type: string, enum: [todo, running, done] }
+        narration: { type: string }
+        visual: { type: string }
+
+    StoryStatus:
+      type: object
+      additionalProperties: false
+      required: [asset_id, title, status, error, scene_count, scenes_done, style, topic, voice, fade, vision, narrated, scenes, file_url]
+      properties:
+        asset_id: { type: string, description: "The story is a library video (kind generated_video)" }
+        title: { type: string }
+        status: { type: string, enum: [pending, ready, failed] }
+        error: { type: string }
+        scene_count: { type: integer, minimum: 0 }
+        scenes_done: { type: integer, minimum: 0 }
+        style: { type: string }
+        topic: { type: string }
+        voice: { type: string }
+        fade: { type: boolean }
+        vision: { type: boolean }
+        narrated: { type: boolean }
+        scenes: { type: array, items: { $ref: "#/components/schemas/StoryScene" } }
+        file_url: { type: [string, "null"], description: "Set when status is ready" }

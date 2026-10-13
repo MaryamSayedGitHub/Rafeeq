@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 VIDEO_EXTS = {".mp4", ".webm", ".mov"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg"}
 MAX_UPLOAD_BYTES = {"image": 15 * 1024 * 1024, "video": 150 * 1024 * 1024, "audio": 40 * 1024 * 1024}
@@ -58,6 +58,9 @@ def edit_image(data: bytes, ext: str, ops: dict) -> bytes:
     ext = ext.lower()
     if ext not in IMAGE_EXTS:
         raise MediaError("Unsupported image type")
+    if ext == ".gif":
+        raise MediaError("An animated GIF cannot be edited as a picture (it would lose its animation). "
+                         "Edit the source video and convert it to a GIF again.")
     image = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise MediaError("This is not a readable image")

@@ -534,7 +534,7 @@ def csrf_of(html):
 def test_each_studio_is_its_own_page_and_the_sidebar_links_them(client):
     t = login(client.app, "mona@rafeeq.demo")
     pages = {"/app/video": "اكتشاف الفيديو", "/app/presentations": "العروض التقديمية", "/app/media": "الصور والوسائط",
-             "/app/learning": "منصتي التعليمية", "/app/library": "مكتبتي"}
+             "/app/story": "استوديو فيديو القصة", "/app/learning": "منصتي التعليمية", "/app/library": "مكتبتي"}
     for path, heading in pages.items():
         r = t.get(path)
         assert r.status_code == 200 and heading in r.text, path
@@ -648,3 +648,234 @@ def test_youtube_results_page_is_read_without_the_unmaintained_library():
     assert [c["video_id"] for c in found] == ["abc12345678", "zzz12345678"]
     assert found[0]["title"] == "Cell division" and found[0]["thumbnail"] == "big" and found[0]["channel"] == "Channel"
     assert yd.parse_results_page("<html>consent page</html>") == []
+
+
+def test_blocked_or_captionless_videos_are_not_asked_for_again(monkeypatch):
+    import sys, types
+    from rafeeq.teacher.lecturer import youtube_discovery as yd
+
+    class IpBlocked(Exception): pass
+    class TranscriptsDisabled(Exception): pass
+    calls = []
+
+    class Api:
+        def fetch(self, video_id, languages):
+            calls.append(video_id)
+            raise {"a": TranscriptsDisabled, "b": IpBlocked}[video_id]()
+
+    monkeypatch.setitem(sys.modules, "youtube_transcript_api", types.SimpleNamespace(YouTubeTranscriptApi=Api))
+    monkeypatch.setattr(yd, "_NO_CAPTIONS", {})
+    monkeypatch.setattr(yd, "_BLOCKED_UNTIL", 0.0)
+    assert yd.fetch_transcript("a") is None and yd.fetch_transcript("a") is None
+    assert calls == ["a"]                                  # captions off: asked once
+    assert yd.fetch_transcript("b") is None
+    assert yd.fetch_transcript("c") is None                # blocked: nothing else is requested for a while
+    assert calls == ["a", "b"]
+
+
+def test_video_lengths_and_search_fallback_helpers():
+    from rafeeq.teacher.lecturer import youtube_discovery as yd
+
+    assert yd.parse_duration("12:34") == 754 and yd.parse_duration("1:02:03") == 3723
+    assert yd.parse_duration("") == 0 and yd.parse_duration("LIVE") == 0
+    assert yd.expand_queries("ما هي الخلية")[0] == "ما هي الخلية"          # the question itself always comes first
+
+
+def test_gemini_outline_is_cleaned_and_failures_are_remembered(monkeypatch):
+    from rafeeq.teacher.lecturer import youtube_discovery as yd
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "x")
+    monkeypatch.setattr(yd, "_NO_OUTLINE", set())
+    rows = [{"start": 0, "end": 60, "text": "intro"}, {"start": 60, "end": 500, "text": "long"},
+            {"start": 700, "end": 760, "text": "after the end"}, {"start": "bad"}, {"start": 90, "end": 80, "text": "backwards"}]
+    monkeypatch.setattr(yd, "_json_from_gemini", lambda *a, **k: rows)
+    chunks = yd.outline_with_gemini("abc12345678", 300)
+    assert [c["text"] for c in chunks] == ["intro", "long"] and chunks[1]["end_sec"] == 300
+
+    def boom(*a, **k):
+        raise RuntimeError("quota")
+    monkeypatch.setattr(yd, "_json_from_gemini", boom)
+    assert yd.outline_with_gemini("zzz12345678", 300) == []
+    monkeypatch.setattr(yd, "_json_from_gemini", lambda *a, **k: rows)
+    assert yd.outline_with_gemini("zzz12345678", 300) == []                  # not retried
+
+
+# ===================================================================== multi-scene story video
+def _fake_clip_bytes(color="red", secs=2) -> bytes:
+    import shutil
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    with tempfile.TemporaryDirectory() as tmp:
+        dst = Path(tmp) / "c.mp4"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c={color}:s=320x180:d={secs}:r=24",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(dst)], check=True)
+        return dst.read_bytes()
+
+
+class _Llm:
+    def invoke(self, prompt):
+        scenes = ", ".join('{"visual": "a girl %d waters a plant", "narration": "جملة %d"}' % (i, i) for i in range(1, 5))
+        return SimpleNamespace(content='<think>hmm</think>```json\n{"character": "girl in a yellow coat", "setting": "green garden", "scenes": [' + scenes + ']}\n```')
+
+
+def test_story_prompts_repeat_the_character_style_and_setting():
+    from rafeeq.teacher import story_video as sv
+
+    plan = sv.plan_story("how plants grow", scenes=3, language="ar", style="flat", llm=_Llm())
+    assert len(plan["scenes"]) == 3 and plan["character"] == "girl in a yellow coat"           # extra scenes dropped, <think> ignored
+    for i in range(3):
+        p = sv.scene_prompt(plan, i, continuity="the girl stands by the tree" if i else "")
+        assert "girl in a yellow coat" in p and "green garden" in p and "flat vector" in p.lower() and len(p) <= 800
+    assert "previous scene ended" in sv.scene_prompt(plan, 1, "the girl stands by the tree")
+    with pytest.raises(sv.StoryError):
+        sv.plan_story("x", llm=_Llm())
+    with pytest.raises(sv.StoryError):
+        sv.plan_story("how plants grow", llm=SimpleNamespace(invoke=lambda p: "no json here"))
+
+
+def test_story_filter_joins_clips_with_fades_or_cuts():
+    from rafeeq.teacher import story_video as sv
+
+    graph, label = sv.stitch_filter([5, 5, 5], 1280, 720, 0.5)
+    assert label == "[out]" and graph.count("xfade") == 2 and "offset=4.500" in graph and "offset=9.000" in graph
+    cut, _ = sv.stitch_filter([5, 5], 1280, 720, 0)
+    assert "concat=n=2" in cut and "xfade" not in cut
+
+
+def test_story_runs_scene_by_scene_and_ends_as_one_library_video(store, folders, monkeypatch):
+    from rafeeq.teacher import assets
+    from rafeeq.teacher import story_video as sv
+    from rafeeq.teacher.lecturer import video_gen
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "x")
+    sent, state = [], {"n": 0, "running": set()}
+
+    def submit(prompt, image_bytes=None, image_filename="", duration=5, **kw):
+        state["n"] += 1
+        sent.append({"prompt": prompt, "image": image_bytes, "duration": duration, **kw})
+        return {"ok": True, "task_id": f"t{state['n']}", "model": "wan-fake"}
+
+    def poll(task_id):
+        if task_id not in state["running"]:                    # the first poll of each scene: still rendering
+            state["running"].add(task_id)
+            return {"status": "RUNNING", "video_url": None, "error": None}
+        return {"status": "SUCCEEDED", "video_url": "https://x/" + task_id + ".mp4", "error": None}
+
+    clip = _fake_clip_bytes()
+    monkeypatch.setattr(video_gen, "submit_task", submit)
+    monkeypatch.setattr(video_gen, "poll_task", poll)
+    monkeypatch.setattr(video_gen, "download_video", lambda url: clip)
+
+    a = sv.start_story(store, "u_mona", "how plants grow", scenes=3, style="clay", fade=True, llm=_Llm())
+    assert a["status"] == "pending" and a["kind"] == "generated_video"
+    assert sv.start_story(store, "u_mona", "how plants grow", scenes=3, style="clay", fade=True, llm=_Llm())["asset_id"] == a["asset_id"]   # no second payment
+
+    for _ in range(40):
+        a = sv.advance(store, "u_mona", a["asset_id"])
+        if a["status"] != "pending":
+            break
+    assert a["status"] == "ready", a.get("error")
+    assert len(sent) == 3 and sent[0]["image"] is None                       # scene 1: text only
+    assert sent[1]["image"] and sent[2]["image"]                             # scenes 2 and 3 start from the previous last frame
+    assert all("girl in a yellow coat" in s["prompt"] for s in sent)         # same character every time
+    assert len({s["seed"] for s in sent}) == 1 and all(s["prompt_extend"] is False for s in sent)   # same seed, prompt left as written
+    final = assets.asset_file(a)
+    assert final is not None and final.name == "story.mp4" and final.stat().st_size > 1000
+    seconds, _, _ = sv.probe(final)
+    assert 4.5 < seconds < 6.2                                               # 3 clips of 2 s, 0.5 s fades
+    view = sv.story_view(a)
+    assert view["scenes_done"] == 3 and view["file_url"] == f"/teacher/assets/{a['asset_id']}/file"
+    assert sv.advance(store, "u_mona", a["asset_id"])["status"] == "ready"      # a finished story is left alone
+    assert assets.get_asset(store, "u_other", a["asset_id"]) is None
+
+
+def test_a_failed_scene_stops_the_story_and_retry_restarts_it(store, folders, monkeypatch):
+    from rafeeq.teacher import story_video as sv
+    from rafeeq.teacher.lecturer import video_gen
+
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "x")
+    monkeypatch.setattr(video_gen, "submit_task", lambda *a, **k: {"ok": False, "error": "quota exceeded"})
+    a = sv.start_story(store, "u_mona", "how plants grow", scenes=2, llm=_Llm())
+    a = sv.advance(store, "u_mona", a["asset_id"])
+    assert a["status"] == "failed" and "quota exceeded" in a["error"] and "Scene 1" in a["error"]
+    assert sv.start_story(store, "u_mona", "how plants grow", scenes=2, llm=_Llm())["status"] == "failed"      # no silent restart
+    again = sv.start_story(store, "u_mona", "how plants grow", scenes=2, llm=_Llm(), retry=True)
+    assert again["asset_id"] == a["asset_id"] and again["status"] == "pending"
+
+
+def test_a_video_can_become_a_gif(tmp_path):
+    from rafeeq.teacher import story_video as sv
+
+    src = tmp_path / "v.mp4"
+    src.write_bytes(_fake_clip_bytes(secs=3))
+    gif = sv.to_gif(src, tmp_path / "v.gif", start=0, end=2)
+    assert gif.read_bytes()[:6] == b"GIF89a"
+
+
+def test_story_video_api_and_page(client, monkeypatch):
+    from rafeeq.teacher import media_tools
+    from rafeeq.teacher import story_video as sv
+    from rafeeq.teacher.lecturer import video_gen
+
+    body = {"topic": "how plants grow", "scenes": 2, "style": "flat", "language": "en", "fade": True}
+    assert client.post("/teacher/stories", json=body).status_code == 401
+    assert client.post("/teacher/stories", headers=SARA, json=body).status_code == 403
+    monkeypatch.setattr(media_tools, "ffmpeg_path", lambda: None)
+    assert client.post("/teacher/stories", headers=MONA, json=body).status_code == 503          # no ffmpeg: say so before paying
+    monkeypatch.setattr(media_tools, "ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    assert client.post("/teacher/stories", headers=MONA, json=body).status_code == 503          # no key
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "x")
+    assert client.post("/teacher/stories", headers=MONA, json={**body, "scenes": 99}).status_code == 422
+
+    monkeypatch.setattr(sv, "plan_story", lambda topic, scenes, language, style, llm=None: {
+        "style": style, "character": "girl", "setting": "garden",
+        "scenes": [{"visual": "a", "narration": "n1"}, {"visual": "b", "narration": "n2"}]})
+    submitted = []
+    monkeypatch.setattr(video_gen, "submit_task", lambda *a, **k: submitted.append(1) or {"ok": True, "task_id": f"t{len(submitted)}", "model": "m"})
+    monkeypatch.setattr(video_gen, "poll_task", lambda task_id: {"status": "RUNNING", "video_url": None, "error": None})
+    first = client.post("/teacher/stories", headers=MONA, json=body)
+    assert first.status_code == 201 and first.json()["status"] == "pending" and first.json()["scene_count"] == 2
+    asset_id = first.json()["asset_id"]
+    assert client.post("/teacher/stories", headers=MONA, json=body).json()["asset_id"] == asset_id   # the same request is the same story
+    status = client.get(f"/teacher/stories/{asset_id}", headers=MONA)
+    assert status.status_code == 200 and status.json()["scenes"][0]["state"] == "running" and len(submitted) == 1
+    assert client.get(f"/teacher/stories/{asset_id}", headers=MONA).json()["scenes"][0]["state"] == "running" and len(submitted) == 1
+    assert client.get(f"/teacher/stories/{asset_id}", headers=SARA).status_code == 403
+    assert client.get("/teacher/stories/a_nope", headers=MONA).status_code == 404
+    other = new_account(client, "teacher", "other@x.com")
+    assert client.get(f"/teacher/stories/{asset_id}", headers=other).status_code == 404            # not their story
+
+    t = login(client.app, "mona@rafeeq.demo")
+    page = t.get("/app/story")
+    assert page.status_code == 200 and "how plants grow" in page.text and 'name="scenes"' in page.text
+    poll = t.get(f"/app/story/{asset_id}")
+    assert poll.status_code == 200 and "hx-get" in poll.text and "n1" in poll.text
+
+
+def test_a_video_becomes_a_gif_that_can_go_on_a_slide(client):
+    import shutil
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    video = client.post("/teacher/media/upload", headers=MONA, files={"file": ("v.mp4", _fake_clip_bytes(secs=2), "video/mp4")})
+    assert video.status_code == 201, video.text
+    gif = client.post(f"/teacher/media/{video.json()['asset_id']}/edit", headers=MONA, json={"ops": {"to_gif": True}, "title": "Loop"})
+    assert gif.status_code == 201, gif.text
+    gif = gif.json()
+    assert gif["kind"] == "image" and gif["origin"] == "edited" and gif["parent_asset_id"] == video.json()["asset_id"]
+    assert client.get(gif["file_url"], headers=MONA).content[:6] == b"GIF89a"
+    again = client.post(f"/teacher/media/{gif['asset_id']}/edit", headers=MONA, json={"ops": {"rotate": 90}})
+    assert again.status_code == 422                                                            # editing would flatten the animation
+    deck = make_deck(client)
+    placed = client.post(f"/teacher/decks/{deck['deck_id']}/slides/0/image", headers=MONA, json={"asset_id": gif["asset_id"]})
+    assert placed.status_code == 200 and placed.json()["slides"][0]["image_asset_id"] == gif["asset_id"]
+    exported = client.post(f"/teacher/decks/{deck['deck_id']}/export", headers=MONA)
+    assert exported.status_code in (200, 201), exported.text
+    data = client.get(exported.json()["file_url"], headers=MONA).content
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        assert any(n.startswith("ppt/media/") and n.endswith(".gif") for n in z.namelist())     # the animated GIF travels inside the .pptx

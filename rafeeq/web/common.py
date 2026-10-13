@@ -18,6 +18,28 @@ from rafeeq.web.icons import icon
 HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 templates.env.globals["icon"] = icon
+
+
+def yt_embed(url: str, start=None, end=None) -> str:
+    """Embeddable player URL for a YouTube link, playing only start..end. '' for any other link."""
+    import re
+    from urllib.parse import urlparse
+
+    host = (urlparse(url or "").hostname or "").lower()
+    if not (host.endswith("youtube.com") or host == "youtu.be"):
+        return ""
+    m = re.search(r"(?:[?&]v=|youtu\.be/|/embed/)([A-Za-z0-9_-]{11})", url)
+    if not m:
+        return ""
+    query = ["rel=0"]
+    if start:
+        query.append(f"start={int(start)}")
+    if end:
+        query.append(f"end={int(end)}")
+    return f"https://www.youtube-nocookie.com/embed/{m.group(1)}?" + "&".join(query)
+
+
+templates.env.globals["yt_embed"] = yt_embed
 templates.env.trim_blocks = True
 templates.env.lstrip_blocks = True
 

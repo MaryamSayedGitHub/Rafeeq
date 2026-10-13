@@ -555,3 +555,17 @@ def test_language_switch_never_redirects_off_site(env, nxt):
     app, _ = env
     r = TestClient(app).get("/app/lang/en", params={"next": nxt}, follow_redirects=False)
     assert r.headers["location"] == "/app/"
+
+
+def test_pages_send_a_referrer_so_embedded_youtube_players_work(env):
+    app, _ = env
+    r = TestClient(app).get("/app/login")
+    assert r.headers["referrer-policy"] == "strict-origin-when-cross-origin"     # "same-origin" made YouTube refuse to play
+
+
+def test_a_saved_youtube_moment_plays_only_its_clip():
+    from rafeeq.web.common import yt_embed
+
+    url = yt_embed("https://www.youtube.com/watch?v=abc12345678&t=75s", 75.0, 130.0)
+    assert url == "https://www.youtube-nocookie.com/embed/abc12345678?rel=0&start=75&end=130"
+    assert yt_embed("https://example.com/watch?v=abc12345678") == "" and yt_embed("") == ""

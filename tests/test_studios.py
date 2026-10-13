@@ -632,3 +632,19 @@ def test_a_finished_lesson_offers_the_other_studios():
         session={"session_id": "s_9", "topic": "x", "status": "awaiting_approval", "draft": {}, "selected_agents": [],
                  "files": [], "revisions_left": 1, "memory": []})
     assert "/app/presentations/open" not in waiting                                                     # only after approval
+
+
+def test_youtube_results_page_is_read_without_the_unmaintained_library():
+    import json
+    from rafeeq.teacher.lecturer import youtube_discovery as yd
+
+    data = {"contents": [{"videoRenderer": {"videoId": "abc12345678", "title": {"runs": [{"text": "Cell"}, {"text": " division"}]},
+                                            "ownerText": {"runs": [{"text": "Channel"}]},
+                                            "thumbnail": {"thumbnails": [{"url": "small"}, {"url": "big"}]}}},
+                         {"videoRenderer": {"videoId": "abc12345678"}},               # duplicate is dropped
+                         {"videoRenderer": {"videoId": "zzz12345678"}}]}
+    html = "<script>var ytInitialData = " + json.dumps(data) + ";</script>"
+    found = yd.parse_results_page(html)
+    assert [c["video_id"] for c in found] == ["abc12345678", "zzz12345678"]
+    assert found[0]["title"] == "Cell division" and found[0]["thumbnail"] == "big" and found[0]["channel"] == "Channel"
+    assert yd.parse_results_page("<html>consent page</html>") == []

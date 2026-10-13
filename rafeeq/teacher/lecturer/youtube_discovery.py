@@ -41,20 +41,90 @@ MAX_CANDIDATES = 8          # a few extra than we need: some won't have a transc
 # ---------------------------------------------------------------------------
 # Step 1 — find candidate videos (no API key / no Google Cloud billing needed)
 # ---------------------------------------------------------------------------
+def _walk_videos(node, out: list) -> None:
+    """Collect every videoRenderer in YouTube's search data, wherever it sits."""
+    if isinstance(node, dict):
+        if "videoRenderer" in node and isinstance(node["videoRenderer"], dict):
+            out.append(node["videoRenderer"])
+        else:
+            for v in node.values():
+                _walk_videos(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_videos(v, out)
+
+
+def parse_results_page(html: str, max_results: int = MAX_CANDIDATES) -> list[dict]:
+    """Read the videos out of a YouTube results page (the JSON in `ytInitialData`)."""
+    import json
+
+    marker = "ytInitialData"
+    at = html.find(marker)
+    while at != -1:
+        start = html.find("{", at)
+        if start == -1:
+            break
+        try:
+            data, _ = json.JSONDecoder().raw_decode(html[start:])
+        except ValueError:
+            at = html.find(marker, at + len(marker))
+            continue
+        found: list = []
+        _walk_videos(data, found)
+        candidates, seen = [], set()
+        for r in found:
+            vid = r.get("videoId")
+            if not vid or vid in seen:
+                continue
+            seen.add(vid)
+            title = "".join(run.get("text", "") for run in (r.get("title") or {}).get("runs", []))
+            owner = "".join(run.get("text", "") for run in (r.get("ownerText") or {}).get("runs", []))
+            thumbs = (r.get("thumbnail") or {}).get("thumbnails") or []
+            candidates.append({"video_id": vid, "title": title, "channel": owner,
+                               "thumbnail": thumbs[-1].get("url", "") if thumbs else ""})
+            if len(candidates) >= max_results:
+                break
+        if candidates:
+            return candidates
+        at = html.find(marker, at + len(marker))
+    return []
+
+
+def _scrape_candidates(query: str, max_results: int) -> list[dict]:
+    """Our own reader of YouTube's results page (httpx only). Used because
+    youtube-search-python is unmaintained and crashes with httpx >= 0.28."""
+    import httpx
+
+    resp = httpx.get(
+        "https://www.youtube.com/results",
+        params={"search_query": query, "sp": "EgIQAQ%3D%3D"},          # filter: videos only
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/124.0 Safari/537.36",
+                 "Accept-Language": "ar-EG,ar;q=0.9,en;q=0.8"},
+        cookies={"CONSENT": "YES+1", "SOCS": "CAI"},
+        follow_redirects=True, timeout=20,
+    )
+    resp.raise_for_status()
+    return parse_results_page(resp.text, max_results)
+
+
 def search_candidates(query: str, max_results: int = MAX_CANDIDATES) -> list[dict]:
-    """Uses youtube-search-python: it reads YouTube's own search results page,
-    the same way a browser would -- no API key, no Google Cloud project, no
-    billing account. [] (not an exception) if the search fails (network issue,
-    or YouTube changing its page layout breaking the parser)."""
+    """Candidate videos for a question, no API key needed. [] (not an exception)
+    if every method fails; the reason is logged (and shown by `diagnose`)."""
+    try:
+        found = _scrape_candidates(query, max_results)
+        if found:
+            return found
+        log.warning("youtube_discovery: results page had no videos (layout changed or consent page)")
+    except Exception as e:
+        log.warning("youtube_discovery: page search failed: %s: %s", type(e).__name__, str(e)[:300])
     try:
         from youtubesearchpython import VideosSearch
 
-        search = VideosSearch(query, limit=max_results, language="ar", region="EG")
-        items = search.result().get("result", [])
+        items = VideosSearch(query, limit=max_results, language="ar", region="EG").result().get("result", [])
     except Exception as e:
-        log.warning("youtube_discovery: search failed: %s: %s", type(e).__name__, str(e)[:300])
+        log.warning("youtube_discovery: library search failed: %s: %s", type(e).__name__, str(e)[:300])
         return []
-
     candidates = []
     for item in items:
         video_id = item.get("id")
@@ -74,14 +144,19 @@ def search_candidates(query: str, max_results: int = MAX_CANDIDATES) -> list[dic
 # Step 2 — Transcript + chunking
 # ---------------------------------------------------------------------------
 def fetch_transcript(video_id: str) -> list[dict] | None:
-    """None when the video has no usable transcript (disabled, not found, ...)."""
+    """None when the video has no usable transcript (disabled, not found, ...).
+    Works with youtube-transcript-api 1.x (`fetch`) and the old 0.6 (`get_transcript`)."""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
 
-        # Arabic first (most of our students' content), English fallback.
-        return YouTubeTranscriptApi.get_transcript(video_id, languages=["ar", "en"])
+        languages = ["ar", "en"]                   # Arabic first (our students' content), English fallback
+        api = YouTubeTranscriptApi() if hasattr(YouTubeTranscriptApi, "fetch") else None
+        if api is not None:
+            return [{"text": x.text, "start": x.start, "duration": x.duration}
+                    for x in api.fetch(video_id, languages=languages)]
+        return YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
     except Exception as e:
-        log.info("youtube_discovery: no transcript for %s (%s)", video_id, type(e).__name__)
+        log.info("youtube_discovery: no transcript for %s (%s: %s)", video_id, type(e).__name__, str(e)[:120])
         return None
 
 
@@ -252,3 +327,34 @@ def search(question: str, top_k: int = 5) -> list[dict]:
         })
     results.sort(key=lambda r: r["score"], reverse=True)
     return results[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Which step is failing?   uv run python -m rafeeq.teacher.lecturer.youtube_discovery "سؤالك"
+# ---------------------------------------------------------------------------
+def diagnose(question: str) -> None:
+    logging.basicConfig(level=logging.INFO)
+    print("DATABASE_URL set:", bool(DATABASE_URL), "| GOOGLE_API_KEY set:", bool(os.getenv("GOOGLE_API_KEY")))
+    found = search_candidates(question)
+    print(f"1) YouTube search: {len(found)} videos", [c["title"][:40] for c in found[:3]])
+    if not found:
+        return
+    with_text = [c for c in found if fetch_transcript(c["video_id"])]
+    print(f"2) transcripts: {len(with_text)} of {len(found)} videos have captions")
+    try:
+        vec = _embed(question)
+        print("3) embedding:", "ok" if vec else "FAILED (GOOGLE_API_KEY missing?)")
+    except Exception as e:
+        print("3) embedding FAILED:", type(e).__name__, str(e)[:200])
+    try:
+        setup_table()
+        print("4) Postgres/pgvector: ok")
+    except Exception as e:
+        print("4) Postgres/pgvector FAILED:", type(e).__name__, str(e)[:200])
+    print("5) final results:", len(search(question)))
+
+
+if __name__ == "__main__":
+    import sys
+
+    diagnose(" ".join(sys.argv[1:]) or "ما هي الخلية")

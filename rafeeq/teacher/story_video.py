@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 
 MIN_SCENES, MAX_SCENES, DEFAULT_SCENES = 2, 8, 6
 SCENE_SECONDS = 5
+NARRATION_WORDS = (18, 32)          # a scene is held on its last frame while the teacher finishes speaking
 FADE_SECONDS = 0.5
 FFMPEG_TIMEOUT = 600
 
@@ -50,6 +51,8 @@ STYLES = {
 }
 
 _locks: dict[str, threading.Lock] = {}
+_finishing: set[str] = set()          # stories whose joining/narration runs in a background thread
+FINISH_WAIT_SECONDS = 20              # a poll waits this long for a quick finish before it answers "still working"
 
 
 class StoryError(ValueError):
@@ -59,6 +62,8 @@ class StoryError(ValueError):
 # ------------------------------------------------------------------ planning
 def _extract_json(text: str):
     """The first JSON object in an LLM answer (drops <think> blocks and code fences)."""
+    if not isinstance(text, str):                       # some providers (Gemini) answer with a list of blocks
+        text = "".join(b if isinstance(b, str) else str(b.get("text", "")) for b in (text or []) if isinstance(b, (str, dict)))
     text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S)
     start = text.find("{")
     if start == -1:
@@ -74,6 +79,39 @@ def _clean(value, limit: int) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+def _facts_block(bp: dict) -> str:
+    lines = ["Verified teaching notes (use them, in order of importance):"]
+    if bp.get("objective"):
+        lines.append(f"- Goal: {bp['objective']}")
+    lines += [f"- Fact: {f}" for f in bp.get("facts", [])]
+    for key, label in (("analogy", "Analogy a child understands"), ("example", "Everyday example"), ("misconception", "Common mistake to correct")):
+        if bp.get(key):
+            lines.append(f"- {label}: {bp[key]}")
+    return "\n".join(lines) + "\n"
+
+
+def _blueprint(llm, topic: str, lang: str) -> dict:
+    """First pass: the subject knowledge (accurate facts, an analogy, a common mistake) before any scene is written.
+    Never fatal: when the model cannot answer, the scenes are planned without it."""
+    prompt = (
+        f"You are an expert teacher. Topic: {topic}\n"
+        f"Write the teaching notes for a short video, in {lang}. Be accurate and specific (names, numbers, steps), no filler.\n"
+        'Answer with JSON only: {"objective": "what the student can do after the video", "facts": ["6 to 8 short, correct, '
+        'concrete facts in teaching order"], "analogy": "...", "example": "...", "misconception": "..."}')
+    try:
+        raw = llm.invoke(prompt)
+        data = _extract_json(getattr(raw, "content", raw))
+    except Exception as e:                                   # noqa: BLE001 - an optional first pass
+        log.info("story_video: blueprint skipped (%s)", type(e).__name__)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    facts = [_clean(f, 220) for f in data.get("facts", []) if isinstance(f, str) and len(_clean(f, 220)) > 5][:8]
+    if len(facts) < 3:
+        return {}
+    return {"facts": facts, **{k: _clean(data.get(k), 220) for k in ("objective", "analogy", "example", "misconception")}}
+
+
 def plan_story(topic: str, scenes: int = DEFAULT_SCENES, language: str = "ar", style: str = "storybook", llm=None) -> dict:
     """{'style','character','setting','scenes':[{'visual','narration'}]}. Raises StoryError."""
     topic = _clean(topic, 400)
@@ -86,15 +124,22 @@ def plan_story(topic: str, scenes: int = DEFAULT_SCENES, language: str = "ar", s
         from rafeeq.teacher.lecturer.llm import get_llm
         llm = get_llm(provider=os.getenv("STORY_LLM_PROVIDER") or None, temperature=0.6)
     lang = "Arabic" if language == "ar" else "English"
+    facts = _blueprint(llm, topic, lang)
     prompt = (
-        f"Plan a short educational animated video of exactly {scenes} scenes (about {SCENE_SECONDS} seconds each) "
-        f"that explains: {topic}\n"
+        f"You are a teacher writing a short EXPLAINER video of exactly {scenes} scenes that teaches: {topic}\n"
+        + (_facts_block(facts) if facts else "") +
+        "The video must TEACH, not just show a character walking around. Follow this arc: "
+        "scene 1 = a hook / why it matters; middle scenes = one new idea or one step of the process each, in order, "
+        "with a concrete fact, number or example; last scene = a one-sentence recap.\n"
         "Rules:\n"
-        "- 'character': ONE fixed visual description (age, clothes, colours) of the main character or subject; "
-        "it will be repeated in every scene.\n"
-        "- 'setting': ONE fixed place and colour palette.\n"
-        "- each scene: 'visual' = what the camera sees and how things move (English, concrete, no text on screen); "
-        f"'narration' = one short sentence of at most 22 words, in {lang}, explaining that moment.\n"
+        "- 'character': ONE fixed description of the main subject (a person, animal, object or phenomenon) that "
+        "appears in the scenes, or an empty string when the topic is a process with no character.\n"
+        "- 'setting': ONE fixed look and colour palette.\n"
+        "- each scene: 'visual' = in English, what the camera shows and how it moves. Show the REAL thing being explained "
+        "(the process, the object, the experiment), different in every scene. Never ask for text, labels or numbers on screen.\n"
+        f"- each scene: 'narration' = what the teacher says over the scene, in {lang}, {NARRATION_WORDS[0]} to {NARRATION_WORDS[1]} words, "
+        "simple, correct, and containing the teaching point of that scene (never filler such as 'let us see'). "
+        "Use the facts above; do not add facts that are not true.\n"
         "Answer with JSON only: "
         '{"character": "...", "setting": "...", "scenes": [{"visual": "...", "narration": "..."}]}')
     try:
@@ -103,7 +148,11 @@ def plan_story(topic: str, scenes: int = DEFAULT_SCENES, language: str = "ar", s
     except StoryError:
         raise
     except Exception as e:
-        raise StoryError(f"The planner is not available ({type(e).__name__})") from None
+        log.warning("story_video: planner failed: %r", e)
+        provider = os.getenv("STORY_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "default"
+        where = f" at {os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}" if provider == "ollama" else ""
+        raise StoryError(f"The planner ('{provider}'{where}) is not available ({type(e).__name__}). "
+                         "Check that the model server is running and the name in .env is right.") from None
     rows = [r for r in data.get("scenes", []) if isinstance(r, dict) and _clean(r.get("visual"), 10)]
     if len(rows) < MIN_SCENES:
         raise StoryError("The planner returned too few scenes")
@@ -111,7 +160,7 @@ def plan_story(topic: str, scenes: int = DEFAULT_SCENES, language: str = "ar", s
         "style": style,
         "character": _clean(data.get("character"), 300),
         "setting": _clean(data.get("setting"), 200),
-        "scenes": [{"visual": _clean(r.get("visual"), 300), "narration": _clean(r.get("narration"), 200)} for r in rows[:scenes]],
+        "scenes": [{"visual": _clean(r.get("visual"), 300), "narration": _clean(r.get("narration"), 320)} for r in rows[:scenes]],
     }
 
 
@@ -207,6 +256,33 @@ def stitch(clips: list[Path], dst: Path, fade: float = FADE_SECONDS, narration: 
     return dst
 
 
+
+def extend_clip(clip: Path, dst: Path, seconds: float) -> Path:
+    """Hold the last frame of a clip until it lasts `seconds` (so the narration can finish)."""
+    sec, _, _ = probe(clip)
+    if seconds <= sec + 0.05:
+        return clip
+    _run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(clip),
+          "-vf", f"tpad=stop_mode=clone:stop_duration={seconds - sec:.3f}", "-an",
+          "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", str(dst)])
+    return dst
+
+
+def mix_narration(parts: list[tuple[Path, float]], dst: Path) -> Path:
+    """Place every scene's narration (mp3) at its start time (seconds) on one audio track."""
+    if not parts:
+        raise StoryError("There is no narration to place")
+    cmd = [_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error"]
+    for path, _ in parts:
+        cmd += ["-i", str(path)]
+    delays = [f"[{i}:a]adelay={int(max(0.0, at) * 1000)}|{int(max(0.0, at) * 1000)}[a{i}]" for i, (_, at) in enumerate(parts)]
+    mix = "".join(f"[a{i}]" for i in range(len(parts))) + f"amix=inputs={len(parts)}:normalize=0[out]"
+    _run(cmd + ["-filter_complex", ";".join(delays + [mix]), "-map", "[out]", "-c:a", "libmp3lame", "-q:a", "4", str(dst)])
+    if not dst.is_file() or dst.stat().st_size == 0:
+        raise StoryError("The narration track is empty")
+    return dst
+
+
 def last_frame(clip: Path, dst: Path) -> Path:
     """The final picture of a clip (becomes the first frame of the next scene)."""
     _run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-sseof", "-0.2", "-i", str(clip),
@@ -267,8 +343,16 @@ def start_story(store, teacher_id: str, topic: str, *, scenes: int = DEFAULT_SCE
         raise StoryError("Unknown voice")
     if not os.getenv("DASHSCOPE_API_KEY"):
         raise StoryError("DASHSCOPE_API_KEY is not set in .env")
+    if voice and not media_tools.speech_available():
+        raise StoryError("Narration needs GOOGLE_API_KEY (Gemini voice) or edge-tts: add the key, or choose 'No narration'")
     key = story_key(teacher_id, topic, scenes, style, language, voice, fade)
     existing = asset_lib.find_by_key(store, teacher_id, key)
+    prior = ((existing or {}).get("settings") or {}).get("story") or {}
+    if retry and existing and existing["status"] == "ready" and voice and prior and not prior.get("narrated"):
+        # the scenes are paid and saved: only the narration is done again
+        prior.pop("narration_error", None)
+        return asset_lib.update_asset(store, teacher_id, existing["asset_id"], status="pending", error="",
+                                      settings={**existing["settings"], "story": prior})
     if existing and not (existing["status"] == "failed" and retry) and not asset_lib.is_stale_pending(existing, minutes=240):
         return existing
     plan = plan_story(topic, scenes, language, style, llm=llm)
@@ -290,7 +374,8 @@ def story_view(asset: dict) -> dict:
     return {"asset_id": asset["asset_id"], "title": asset["title"], "status": asset["status"], "error": asset.get("error", ""),
             "scene_count": len(scenes), "scenes_done": done, "style": story.get("style", ""),
             "topic": story.get("topic", ""), "voice": story.get("voice", ""), "fade": bool(story.get("fade", True)),
-            "vision": bool(story.get("vision", False)), "narrated": bool(story.get("narrated", False)),
+            "finishing": asset["asset_id"] in _finishing, "vision": bool(story.get("vision", False)), "narrated": bool(story.get("narrated", False)),
+            "narration_error": story.get("narration_error", ""),
             "scenes": [{"n": i + 1, "state": s["state"], "narration": s.get("narration", ""), "visual": s.get("visual", "")}
                        for i, s in enumerate(scenes)],
             "file_url": f"/teacher/assets/{asset['asset_id']}/file" if asset["status"] == "ready" and asset_lib.asset_file(asset) else None}
@@ -321,7 +406,7 @@ def advance(store, teacher_id: str, asset_id: str) -> dict | None:
         scenes = story["scenes"]
         i = next((k for k, s in enumerate(scenes) if s["state"] != "done"), None)
         if i is None:
-            return _finish(store, teacher_id, asset, story)
+            return _finish_in_background(store, teacher_id, asset, story)
         s = scenes[i]
 
         if s["state"] == "todo":
@@ -356,20 +441,98 @@ def advance(store, teacher_id: str, asset_id: str) -> dict | None:
         lock.release()
 
 
+def silence_points(audio: Path) -> list[float]:
+    """Middle of every pause in a voice track (seconds): the places where it can be cut without breaking a word."""
+    done = subprocess.run([_exe("ffmpeg"), "-hide_banner", "-nostats", "-i", str(audio), "-af", "silencedetect=noise=-35dB:d=0.15",
+                           "-f", "null", "-"], capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
+    starts = [float(x) for x in re.findall(r"silence_start: ([0-9.]+)", done.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end: ([0-9.]+)", done.stderr)]
+    return [(a + b) / 2 for a, b in zip(starts, ends)]
+
+
+def cut_audio(src: Path, dst: Path, start: float, end: float) -> Path:
+    _run([_exe("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
+          "-c:a", "libmp3lame", "-q:a", "4", str(dst)])
+    return dst
+
+
+def split_points(weights: list[int], total: float, pauses: list[float], reach: float = 2.0) -> list[float]:
+    """Where each scene's part of ONE voice track ends: proportional to its text, moved to the nearest pause
+    (within `reach` seconds) so a word is never cut. The last point is the end of the track."""
+    whole = sum(weights) or 1
+    points, acc = [], 0
+    for w in weights[:-1]:
+        acc += w
+        target = total * acc / whole
+        near = [p for p in pauses if abs(p - target) <= reach]
+        points.append(min(near, key=lambda p: abs(p - target)) if near else target)
+    return [*points, total]
+
+
+def _narrate(story: dict, clips: list[Path], tmp: Path) -> tuple[list[Path], Path]:
+    """ONE voice request for the whole video (voice services limit the number of requests), cut at pauses into one
+    part per scene. A scene lasts at least as long as its part (the last frame is held), and each part starts when
+    its scene starts on the joined video."""
+    fade = FADE_SECONDS if story.get("fade") else 0.0
+    texts = [(sc.get("narration") or "").strip() for sc in story["scenes"]]
+    spoken = [i for i, t in enumerate(texts) if len(t) >= 2]
+    if not spoken:
+        raise StoryError("No scene has narration")
+    full = "\n".join(texts[i] for i in spoken)[:media_tools.MAX_SPEECH_CHARS]
+    voice_file = media_tools.synthesize_speech(full, story["voice"], tmp / "voice.mp3")
+    total, _, _ = probe(voice_file)
+    ends = split_points([len(texts[i]) for i in spoken], total, silence_points(voice_file))
+    begins = [0.0, *ends[:-1]]
+    part = {i: cut_audio(voice_file, tmp / f"voice_{i}.mp3", begins[k], ends[k]) for k, i in enumerate(spoken)}
+    out, parts, at = [], [], 0.0
+    for i, clip in enumerate(clips):
+        if i in part:
+            clip = extend_clip(clip, tmp / f"held_{i}.mp4", probe(part[i])[0] + 0.4)
+            parts.append((part[i], at))
+        out.append(clip)
+        at += probe(clip)[0] - fade
+    return out, mix_narration(parts, tmp / "narration.mp3")
+
+
+def _finish_in_background(store, teacher_id: str, asset: dict, story: dict) -> dict:
+    """Narration (one voice call per scene) and the final encode can take minutes, longer than one web request.
+    They run in a thread; this call waits a few seconds so a quick finish is returned at once."""
+    asset_id = asset["asset_id"]
+    if asset_id in _finishing:
+        return asset
+    _finishing.add(asset_id)
+
+    def work():
+        try:
+            _finish(store, teacher_id, asset, story)
+        except Exception as e:                                         # noqa: BLE001 - never leave the story pending forever
+            log.exception("story_video: finishing failed")
+            _fail(store, teacher_id, asset, story, f"The scenes could not be joined: {type(e).__name__}")
+        finally:
+            _finishing.discard(asset_id)
+
+    worker = threading.Thread(target=work, name=f"story-{asset_id}", daemon=True)
+    worker.start()
+    worker.join(FINISH_WAIT_SECONDS)
+    return asset_lib.get_asset(store, teacher_id, asset_id) or asset
+
+
 def _finish(store, teacher_id: str, asset: dict, story: dict) -> dict:
     """All scenes are saved: join them (and the narration) into the library video."""
     try:
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
+            clips = [_path(s["clip"]) for s in story["scenes"]]
             narration = None
-            text = " ".join(s["narration"] for s in story["scenes"] if s.get("narration")).strip()
-            if story.get("voice") and text:
+            if story.get("voice") and any(s.get("narration") for s in story["scenes"]):
                 try:
-                    narration = media_tools.synthesize_speech(text[:media_tools.MAX_SPEECH_CHARS], story["voice"], tmp / "narration.mp3")
-                except media_tools.MediaError as e:
+                    clips, narration = _narrate(story, clips, tmp)
+                    story.pop("narration_error", None)
+                except (media_tools.MediaError, StoryError) as e:
                     log.warning("story_video: narration skipped: %s", e)       # the silent video is still delivered
-            final = stitch([_path(s["clip"]) for s in story["scenes"]], tmp / "story.mp4",
-                           fade=FADE_SECONDS if story.get("fade") else 0, narration=narration)
+                    story["narration_error"] = _clean(e, 200)
+            fade = FADE_SECONDS if story.get("fade") else 0
+            final = stitch(clips, tmp / "story.mp4", fade=fade, narration=narration)
             root, ref = asset_lib.save_file(teacher_id, asset["asset_id"], final.read_bytes(), "story.mp4")
             story["narrated"] = narration is not None
     except (StoryError, asset_lib.AssetError, OSError) as e:

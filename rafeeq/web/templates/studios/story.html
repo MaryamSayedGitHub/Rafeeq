@@ -29,7 +29,7 @@
         <select class="input" id="story-style" name="style">{% for s in styles %}<option value="{{ s }}">{{ t('story.style.' ~ s) }}</option>{% endfor %}</select></div>
       <div class="field"><label for="story-voice">{{ t('story.voice') }}</label>
         <select class="input" id="story-voice" name="voice"><option value="">{{ t('story.no_voice') }}</option>
-          {% for v in caps.get('voices', []) %}<option value="{{ v.voice }}">{{ v.label }}</option>{% endfor %}</select>
+          {% for v in caps.get('voices', []) %}<option value="{{ v.voice }}"{% if v.voice == 'ar-EG-SalmaNeural' %} selected{% endif %}>{{ v.label }}</option>{% endfor %}</select>
         {% if not caps.get('speech') %}<p class="help">{{ t('media.no_speech') }}</p>{% endif %}</div>
     </div>
     <div class="check-row">
@@ -44,11 +44,15 @@
 
 <section class="panel panel-pad" aria-labelledby="story-old-title">
   <h2 class="panel-title" id="story-old-title">{{ icon('folder', 18) }}<span>{{ t('story.mine') }}</span></h2>
+  {# a story that is still being made resumes by itself: the fragment reloads and moves it forward #}
+  {% for a in stories if a.status == 'pending' %}
+    <div class="video-job" hx-get="{{ u('/story/' ~ a.asset_id) }}" hx-trigger="load" hx-swap="outerHTML"><div class="inline-loading" style="display:flex"><span class="spinner"></span>{{ a.title }}</div></div>
+  {% endfor %}
   {% if not stories %}
     {{ empty_state('film', t('story.none'), t('story.none_text')) }}
   {% else %}
   <ul class="asset-grid">
-    {% for a in stories %}{% include "partials/asset_card.html" %}{% endfor %}
+    {% for a in stories if a.status != 'pending' %}{% include "partials/asset_card.html" %}{% endfor %}
   </ul>
   {% endif %}
 </section>

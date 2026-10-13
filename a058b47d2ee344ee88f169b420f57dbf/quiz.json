@@ -1,0 +1,60 @@
+{
+  "topic": "Python Functions",
+  "questions": [
+    {
+      "question": "What is the primary purpose of using the slash (/) in a Python function signature?",
+      "options": [
+        "To force all preceding arguments to be positional-only",
+        "To allow arguments to be passed as either keyword or positional",
+        "To indicate that the function accepts a variable number of arguments",
+        "To mark the end of keyword-only arguments in the signature"
+      ],
+      "answer_index": 0,
+      "explanation": "تستخدم العلامة (/) في Python لتحديد أن المعاملات التي تسبقها يجب أن تُمرر كمواقع (positional-only) فقط ولا يمكن تمريرها كأسماء مفاتيح."
+    },
+    {
+      "question": "Given the function definition 'def func(*args, **kwargs):', what does **kwargs represent?",
+      "options": [
+        "A tuple containing all positional arguments passed",
+        "A dictionary containing all keyword arguments passed",
+        "A list of mandatory arguments required by the function",
+        "A set of unique values passed as keyword arguments"
+      ],
+      "answer_index": 1,
+      "explanation": "يقوم المعامل **kwargs بتجميع كافة المعاملات المسماة (keyword arguments) التي يتم تمريرها للدالة في قاموس (dictionary)."
+    },
+    {
+      "question": "Which of the following is the correct syntax for adding type hints to a function parameter?",
+      "options": [
+        "def greet(name: str) -> None:",
+        "def greet(name = str):",
+        "def greet(name: 'str'):",
+        "def greet(name as str):"
+      ],
+      "answer_index": 0,
+      "explanation": "تستخدم Python النقطتين الرأسيتين (:) لتحديد نوع المعامل، بينما يستخدم السهم (->) لتحديد نوع القيمة التي ترجعها الدالة."
+    },
+    {
+      "question": "What is a recommended best practice for modular function design?",
+      "options": [
+        "Functions should handle multiple unrelated tasks",
+        "Functions should rely heavily on global variables",
+        "Functions should perform a single, well-defined task",
+        "Functions should always print their own results"
+      ],
+      "answer_index": 2,
+      "explanation": "مبدأ المسؤولية الواحدة (Single Responsibility Principle) ينص على أن الدالة يجب أن تقوم بمهمة واحدة محددة لزيادة قابليتها لإعادة الاستخدام والاختبار."
+    },
+    {
+      "question": "In the signature 'def func(*, key):', what does the asterisk (*) enforce?",
+      "options": [
+        "The key argument must be passed as a positional argument",
+        "The key argument must be passed as a keyword argument",
+        "The function can accept any number of positional arguments",
+        "The key argument is optional and can be omitted"
+      ],
+      "answer_index": 1,
+      "explanation": "تفرض العلامة (*) أن أي معامل يأتي بعدها يجب أن يُمرر كمعامل مسمى (keyword-only argument) حصراً."
+    }
+  ]
+}

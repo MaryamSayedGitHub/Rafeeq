@@ -267,12 +267,7 @@ class SpeechRequest(BaseModel):
 @router.get("/teacher/media/capabilities")
 def media_capabilities_api(authorization: Auth = None):
     _owner(authorization)
-    try:
-        import edge_tts  # noqa: F401
-        speech = True
-    except ImportError:
-        speech = False
-    return {"image_editing": True, "ffmpeg": media_tools.ffmpeg_path() is not None, "speech": speech,
+    return {"image_editing": True, "ffmpeg": media_tools.ffmpeg_path() is not None, "speech": media_tools.speech_available(),
             "voices": [{"voice": v, "label": label} for v, label in media_tools.VOICES.items()]}
 
 

@@ -28,6 +28,7 @@
     <div class="swatches" aria-hidden="true">{% for k in ('ink', 'blue', 'blue_soft', 'yellow', 'green', 'paper') %}{% if a.settings.colors and a.settings.colors.get(k) %}<span style="background: {{ a.settings.colors[k] }}"></span>{% endif %}{% endfor %}</div>
   {% elif a.status == 'pending' %}
     <p class="muted small">{{ t('library.not_ready') }}</p>
+    {% if a.settings and a.settings.story %}<a class="btn btn-secondary btn-sm" href="{{ u('/story') }}">{{ icon('film', 16) }}<span>{{ t('story.resume') }}</span></a>{% endif %}
   {% endif %}
   <div class="asset-actions">
     {% if a.kind == 'source_video' and a.source_url %}

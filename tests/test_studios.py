@@ -879,3 +879,209 @@ def test_a_video_becomes_a_gif_that_can_go_on_a_slide(client):
     data = client.get(exported.json()["file_url"], headers=MONA).content
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         assert any(n.startswith("ppt/media/") and n.endswith(".gif") for n in z.namelist())     # the animated GIF travels inside the .pptx
+
+
+def test_story_planner_asks_for_a_teaching_arc_not_a_character_walk():
+    from rafeeq.teacher import story_video as sv
+
+    seen = {}
+
+    class Llm(_Llm):
+        def invoke(self, prompt):
+            seen["prompt"] = prompt
+            return super().invoke(prompt)
+
+    sv.plan_story("دورة الماء", 4, "ar", "flat", llm=Llm())
+    p = seen["prompt"]
+    assert "TEACH" in p and "recap" in p and "REAL thing" in p
+    assert "empty string" in p                                    # a process may have no character
+
+
+def test_story_narration_is_one_voice_request_cut_into_scenes(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    from rafeeq.teacher import media_tools
+    from rafeeq.teacher import story_video as sv
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    clips = []
+    for i in range(2):
+        c = tmp_path / f"c{i}.mp4"
+        c.write_bytes(_fake_clip_bytes("red" if i == 0 else "blue", 2))
+        clips.append(c)
+    asked = []
+
+    def fake_speech(text, voice, dst):
+        asked.append(text)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=300:d=6", str(dst)], check=True)
+        return dst
+
+    monkeypatch.setattr(media_tools, "synthesize_speech", fake_speech)
+    story = {"voice": "ar-EG-SalmaNeural", "fade": False, "scenes": [{"narration": "a" * 50}, {"narration": "b" * 10}]}
+    out, mix = sv._narrate(story, clips, tmp_path)
+    assert len(asked) == 1 and "a" * 50 in asked[0] and "b" * 10 in asked[0]       # one request for the whole video
+    assert sv.probe(out[0])[0] >= 5.3                                               # 5 of the 6 voice seconds belong to scene 1
+    assert abs(sv.probe(out[1])[0] - 2.0) < 0.2                                     # 1 s fits in its 2 s scene
+    assert sv.probe(mix)[0] >= sv.probe(out[0])[0]
+
+
+def test_voice_is_cut_at_pauses_near_the_proportional_point():
+    from rafeeq.teacher import story_video as sv
+
+    assert sv.split_points([50, 10], 6.0, []) == [5.0, 6.0]                         # no pause: proportional
+    assert sv.split_points([50, 10], 6.0, [4.6, 1.0]) == [4.6, 6.0]                 # snaps to the pause 0.4 s away
+    assert sv.split_points([50, 10], 6.0, [1.0]) == [5.0, 6.0]                      # a pause too far is ignored
+    assert sv.split_points([10, 10, 10], 9.0, []) == [3.0, 6.0, 9.0]
+
+
+def test_story_planner_accepts_a_reply_made_of_blocks():
+    from rafeeq.teacher import story_video as sv
+
+    class Llm:
+        def invoke(self, prompt):
+            body = '{"character": "", "setting": "bright", "scenes": [{"visual": "water heats up", "narration": "أ"}, {"visual": "steam rises", "narration": "ب"}]}'
+            return SimpleNamespace(content=[{"type": "text", "text": body[:40]}, {"type": "text", "text": body[40:]}])
+
+    plan = sv.plan_story("دورة الماء", 2, "ar", "flat", llm=Llm())
+    assert len(plan["scenes"]) == 2 and plan["character"] == ""
+
+
+def test_story_planner_writes_the_subject_notes_first_and_uses_them():
+    from rafeeq.teacher import story_video as sv
+
+    prompts = []
+
+    class Llm:
+        def invoke(self, prompt):
+            prompts.append(prompt)
+            if "Write the teaching notes" in prompt:
+                return SimpleNamespace(content='{"objective": "o", "facts": ["الماء يتبخر عند 100 درجة", "البخار يبرد فيصير سحابًا", "السحاب يمطر"], "analogy": "كوب شاي"}')
+            return SimpleNamespace(content='{"character": "", "setting": "s", "scenes": [{"visual": "kettle boils", "narration": "أ"}, {"visual": "cloud forms", "narration": "ب"}]}')
+
+    sv.plan_story("دورة الماء", 2, "ar", "flat", llm=Llm())
+    assert len(prompts) == 2 and "Write the teaching notes" in prompts[0]
+    assert "الماء يتبخر عند 100 درجة" in prompts[1] and "كوب شاي" in prompts[1]
+
+
+def test_story_planner_still_works_when_the_notes_step_fails():
+    from rafeeq.teacher import story_video as sv
+
+    class Llm(_Llm):
+        def invoke(self, prompt):
+            if "Write the teaching notes" in prompt:
+                raise RuntimeError("boom")
+            return super().invoke(prompt)
+
+    assert len(sv.plan_story("الخلية", 3, "ar", "flat", llm=Llm())["scenes"]) == 3
+
+
+def test_speech_uses_gemini_voice_and_falls_back_to_edge(tmp_path, monkeypatch):
+    import base64
+    import shutil
+
+    import httpx
+
+    from rafeeq.teacher import media_tools
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    monkeypatch.setenv("GOOGLE_API_KEY", "k")
+    monkeypatch.delenv("TTS_PROVIDER", raising=False)
+    pcm = b"\x00\x10" * 24000                                           # one second of 24 kHz 16-bit mono
+    calls = []
+
+    def post(url, headers=None, json=None, timeout=None):
+        calls.append((url, json))
+        body = {"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "audio/L16;rate=24000", "data": base64.b64encode(pcm).decode()}}]}}]}
+        return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", post)
+    out = media_tools.synthesize_speech("مرحبا بكم", "ar-EG-SalmaNeural", tmp_path / "a.mp3")
+    assert out.stat().st_size > 0 and "gemini" in calls[0][0]
+    assert calls[0][1]["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+    # Gemini refuses -> the Microsoft voice is tried, and its answer is used
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: httpx.Response(403, request=httpx.Request("POST", url)))
+    def edge_ok(text, voice, dst):
+        dst.write_bytes(b"ID3")
+        return dst
+
+    monkeypatch.setattr(media_tools, "_edge_speech", edge_ok)
+    assert media_tools.synthesize_speech("مرحبا بكم", "ar-EG-ShakirNeural", tmp_path / "b.mp3").read_bytes() == b"ID3"
+
+    # both fail -> one message with both reasons
+    def edge_fail(text, voice, dst):
+        raise media_tools.MediaError("Microsoft said no")
+
+    monkeypatch.setattr(media_tools, "_edge_speech", edge_fail)
+    with pytest.raises(media_tools.MediaError) as e:
+        media_tools.synthesize_speech("مرحبا بكم", "ar-EG-SalmaNeural", tmp_path / "c.mp3")
+    assert "403" in str(e.value) and "Microsoft said no" in str(e.value)
+
+
+def test_story_finish_runs_in_the_background_and_does_not_start_twice(monkeypatch):
+    import threading
+
+    from rafeeq.teacher import assets
+    from rafeeq.teacher import story_video as sv
+
+    release, started = threading.Event(), []
+    state = {"status": "pending"}
+
+    def slow_finish(store, teacher_id, asset, story):
+        started.append(1)
+        release.wait(5)
+        state["status"] = "ready"
+
+    monkeypatch.setattr(sv, "_finish", slow_finish)
+    monkeypatch.setattr(sv, "FINISH_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(assets, "get_asset", lambda store, tid, aid: {"asset_id": aid, "status": state["status"], "settings": {}})
+    asset = {"asset_id": "a_bg", "status": "pending", "settings": {}}
+
+    first = sv._finish_in_background(None, "t", asset, {})
+    assert first["status"] == "pending" and "a_bg" in sv._finishing          # answered at once while it keeps working
+    sv._finish_in_background(None, "t", asset, {})                           # the next poll does not start a second one
+    assert started == [1]
+    release.set()
+    for _ in range(50):
+        if "a_bg" not in sv._finishing:
+            break
+        threading.Event().wait(0.05)
+    assert state["status"] == "ready" and "a_bg" not in sv._finishing
+
+
+def test_gemini_voice_waits_and_retries_when_google_says_too_many_requests(tmp_path, monkeypatch):
+    import base64
+    import shutil
+
+    import httpx
+
+    from rafeeq.teacher import media_tools
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    monkeypatch.setenv("GOOGLE_API_KEY", "k")
+    monkeypatch.setenv("TTS_PROVIDER", "gemini")
+    waited, answers = [], []
+    pcm = base64.b64encode(b"\x00\x10" * 24000).decode()
+
+    def post(url, headers=None, json=None, timeout=None):
+        answers.append(1)
+        req = httpx.Request("POST", url)
+        if len(answers) < 3:
+            return httpx.Response(429, text='{"error": {"details": [{"retryDelay": "7s"}]}}', request=req)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"inlineData": {"data": pcm}}]}}]}, request=req)
+
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(media_tools.time, "sleep", waited.append)
+    assert media_tools.synthesize_speech("مرحبا بكم", "ar-EG-SalmaNeural", tmp_path / "a.mp3").stat().st_size > 0
+    assert waited == [8.0, 8.0]                                       # Google's 7 s + 1 s, twice
+
+    # it never retries forever, and it says what to do
+    answers.clear()
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: httpx.Response(429, text="{}", request=httpx.Request("POST", url)))
+    with pytest.raises(media_tools.MediaError) as e:
+        media_tools.synthesize_speech("مرحبا بكم", "ar-EG-SalmaNeural", tmp_path / "b.mp3")
+    assert "429" in str(e.value) and "quota" in str(e.value)

@@ -50,7 +50,7 @@ rafeeq/
 ├── platform/          # login, rooms, file uploads, database
 ├── copilot/           # routes a message to ask / quiz / check_work / plan
 ├── snap/               # photo → text (OpenCV + a vision-language model)
-├── knowledge/          # indexing and search
+├── knowledge/          # indexing and search (hybrid retrieval, grounded answers, evaluation) -> knowledge/README.md
 ├── tutor/              # grounded answers, handwriting check
 ├── quiz/                # quiz generation, grading, student profile
 └── teacher/            # teacher dashboard and reports
@@ -58,6 +58,7 @@ contracts/
 ├── openapi.yaml        # every route, and the JSON shape it sends/receives
 └── samples/             # one real example per JSON file
 tests/                   # automated checks
+docs/knowledge/          # M2 evaluation reports (historical, written in the standalone project)
 ```
 
 ## Contributing

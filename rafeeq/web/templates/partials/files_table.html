@@ -15,6 +15,7 @@
           <th scope="col">{{ t('materials.col.name') }}</th>
           <th scope="col">{{ t('materials.col.source') }}</th>
           <th scope="col">{{ t('materials.col.status') }}</th>
+          {% if user.role == 'teacher' %}<th scope="col"><span class="sr-only">{{ t('materials.delete') }}</span></th>{% endif %}
         </tr></thead>
         <tbody>
           {% for f in files %}
@@ -22,6 +23,15 @@
             <td><span class="file-cell">{{ icon('file', 18) }}<span dir="auto">{{ f.name }}</span></span></td>
             <td>{{ t('source.' ~ f.source) }}</td>
             <td>{{ file_status(t, f.status) }}</td>
+            {% if user.role == 'teacher' %}
+            <td>
+              <form method="post" action="{{ u('/rooms/' ~ room.room_id ~ '/materials/' ~ f.file_id ~ '/delete') }}"
+                    onsubmit="return confirm(this.dataset.confirm)" data-confirm="{{ t('materials.delete_confirm', name=f.name) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf }}">
+                <button class="btn btn-light btn-sm" type="submit">{{ icon('trash', 16) }}<span>{{ t('materials.delete') }}</span></button>
+              </form>
+            </td>
+            {% endif %}
           </tr>
           {% endfor %}
         </tbody>

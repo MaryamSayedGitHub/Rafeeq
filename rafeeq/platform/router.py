@@ -6,7 +6,7 @@ sample, so existing sample-based tests and teammates' stubs keep working.
 """
 from typing import Literal
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Response, UploadFile
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
@@ -14,6 +14,7 @@ from rafeeq.copilot.supervisor import handle_message
 from rafeeq.platform import service
 from rafeeq.samples import load_sample
 from rafeeq.snap.reader import NotAnImage, ReaderUnavailable, read_snap
+from rafeeq.teacher import class_report
 
 router = APIRouter(tags=["M1 platform"])
 
@@ -147,12 +148,24 @@ def list_room_files(room_id: str, authorization: str | None = Header(default=Non
     return _run(_store().list_files, user, room_id)
 
 
+@router.delete("/rooms/{room_id}/files/{file_id}", status_code=204)
+def delete_room_file(room_id: str, file_id: str, authorization: str | None = Header(default=None)):
+    _run(_store().delete_file, _required_user(authorization), room_id, file_id)
+    return Response(status_code=204)
+
+
 @router.get("/rooms/{room_id}/students")
 def list_room_students(room_id: str, authorization: str | None = Header(default=None)):
     user = _current_user(authorization)
     if user is None:
         return load_sample("room_students")
-    return _run(_store().list_students, user, room_id)
+    result = _run(_store().list_students, user, room_id)
+    # M5: fill each student's level from their quiz results (null stays null without data)
+    levels = class_report.student_levels(class_report.get_store(), room_id)
+    for s in result["students"]:
+        if s["user_id"] in levels:
+            s["mastery"], s["status"] = levels[s["user_id"]]
+    return result
 
 
 # ---------------------------------------------------------------- snap and copilot
@@ -182,6 +195,15 @@ def copilot_message(request: CopilotRequest, authorization: str | None = Header(
     if user is not None:
         _run(_store().room_for, user, request.room_id)
         user_id = user["user_id"]
-        if user["role"] == "student":
-            _store().record_question(user_id, request.room_id)
-    return handle_message(request.room_id, request.text, request.file_id, request.mode, user_id)
+    out = handle_message(request.room_id, request.text, request.file_id, request.mode, user_id)
+    if user is not None and user["role"] == "student":
+        _store().record_question(user_id, request.room_id)
+        # M5: keep the question for the lecturer's Class insights, under the topic of the pages the
+        # answer cited (M2) when there are any; otherwise class_report groups it later.
+        topic_id = None
+        if out["route"] == "ask" and out["payload"].get("citations"):
+            from rafeeq.copilot import clients
+
+            topic_id = clients.optional("topic_of", request.room_id, out["payload"]["citations"])
+        class_report.record_question(request.room_id, user_id, request.text, topic_id=topic_id)
+    return out

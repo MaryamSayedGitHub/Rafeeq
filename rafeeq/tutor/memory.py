@@ -155,7 +155,7 @@ def standalone(question: str, ctx: dict | None = None) -> str:
 The student now writes: {question}
 
 If this message only makes sense with the conversation (it says "it", "that", "and the other one", "why?"...), rewrite it as ONE complete question in the same language,
-using the subject from the conversation. If it already stands alone, return it unchanged.
+using the subject from the conversation. KEEP any request about the answer's size or language (\"in detail\", \"بالتفصيل\", \"in Arabic\"). If it already stands alone, return it unchanged.
 Return JSON only: {{"question": "..."}}""", max_tokens=150)
     out = str(res.get("question", "")).strip() if isinstance(res, dict) else ""
     return out if 3 <= len(out) <= 400 else question

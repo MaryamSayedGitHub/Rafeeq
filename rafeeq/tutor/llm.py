@@ -2,7 +2,9 @@
 
 LLM_PROVIDER=ollama  -> Ollama over HTTP (OLLAMA_MODEL, OLLAMA_BASE_URL): JSON mode, and qwen3's "thinking" is switched off
                         so it does not use up the answer's token budget.
-anything else        -> the team's get_llm() (groq / gemini / xai).
+LLM_API_KEY is set   -> the same hosted, OpenAI-compatible model as M1's Copilot (LLM_BASE_URL, LLM_MODEL: Groq, OpenAI, Gemini...).
+                        This is what the team guide's .env gives, so the tutor needs no other key.
+otherwise            -> the team's get_llm() (groq / gemini / xai, as chosen by LLM_PROVIDER).
 Returns None when no LLM is configured or the call fails, so every tutor route still answers (in a reduced way) without a key.
 """
 from __future__ import annotations
@@ -51,6 +53,27 @@ def _ollama(prompt: str, max_tokens: int | None) -> str:
     return r.json()["message"]["content"]
 
 
+def hosted_ready() -> bool:
+    """M1's key is really filled in (the .env.example placeholder 'put-your-key-here' does not count)."""
+    key = os.getenv("LLM_API_KEY", "").strip()
+    return bool(key) and not key.lower().startswith("put-your")
+
+
+def _hosted(prompt: str, max_tokens: int | None) -> str:
+    """The OpenAI-compatible endpoint of M1 (LLM_API_KEY / LLM_BASE_URL / LLM_MODEL). One retry on a busy model (rate limit, 5xx)."""
+    base = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    body = {"model": os.getenv("LLM_MODEL", "gpt-4o-mini"), "temperature": 0.2, "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": prompt}], **({"max_tokens": max_tokens} if max_tokens else {})}
+    for attempt in (1, 2, 3):
+        r = requests.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {os.environ['LLM_API_KEY']}"}, json=body, timeout=90)
+        if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
+            time.sleep(1.5 * attempt * attempt)
+            continue
+        r.raise_for_status()
+        break
+    return re.sub(r"<think>.*?</think>", "", r.json()["choices"][0]["message"]["content"] or "", flags=re.S)
+
+
 def _langchain(prompt: str) -> str:
     from rafeeq.teacher.lecturer.llm import get_llm                # imported late: the tutor must load without these libraries
     reply = get_llm(temperature=0.2).invoke(prompt)
@@ -59,7 +82,12 @@ def _langchain(prompt: str) -> str:
 
 def ask_json(prompt: str, max_tokens: int | None = None) -> dict | None:
     try:
-        text = _ollama(prompt, max_tokens) if os.getenv("LLM_PROVIDER", "").lower() == "ollama" else _langchain(prompt)
+        if os.getenv("LLM_PROVIDER", "").lower() == "ollama":
+            text = _ollama(prompt, max_tokens)
+        elif hosted_ready():
+            text = _hosted(prompt, max_tokens)
+        else:
+            text = _langchain(prompt)
         out = _parse_json(text)
         return out if isinstance(out, dict) else None
     except Exception as e:                                         # noqa: BLE001  (no key, provider down, bad JSON...)

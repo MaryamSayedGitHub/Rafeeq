@@ -30,7 +30,7 @@ from langgraph.graph import END, START, StateGraph
 from . import quiz, research, safety, study_store, web_search
 from .answer import answer_language, guess_language, tutor_answer
 from .check_work import check_work_detail
-from .events import send_question_event
+from .events import record_handwriting, send_question_event
 from .topics import OTHER, tag_topic
 
 log = logging.getLogger(__name__)
@@ -185,6 +185,8 @@ def n_notify(s: State) -> State:
         understood = bool(w.get("items")) and not w.get("needs_help")
         wrong = next((i for i in w.get("items", []) if i["status"] != "ok"), None)
         text = (s["work_text"] if understood or not wrong else wrong["text"])[:300]
+        items = [i for i in w.get("items", []) if i.get("status") in ("ok", "check", "error")]
+        record_handwriting(s.get("user_id"), s["room_id"], s["topic_id"], sum(i["status"] == "ok" for i in items), len(items))    # the result moves the topic's mastery
         return {"event_delivered": bool(send_question_event(s.get("user_id"), s["room_id"], s["topic_id"], text, kind="understood" if understood else "question"))}
     return {"event_delivered": bool(send_question_event(s.get("user_id"), s["room_id"], s["topic_id"], s["question"]))}
 

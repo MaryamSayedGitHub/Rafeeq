@@ -8,7 +8,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from rafeeq.web import api as A
-from rafeeq.web.common import (api, api_message, check_csrf, flash, notice, redirect, render, require_user, tr)
+from rafeeq.web.common import (api, api_message, check_csrf, flash, notice, redirect, render, require_user, tr, url as u)
 from rafeeq.web.views_rooms import ensure_session, gather, load_room, topic_names
 
 LEVELS = ("beginner", "intermediate", "advanced")
@@ -277,6 +277,72 @@ async def session_file(request: Request):
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(safe, safe='')}"})
 
 
+# ---------------------------------------------------------------- image upload helpers (M5)
+# Shared by the avatar upload and the Visual & Media Studio (rafeeq/web/views_studios.py).
+
+IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _image_too_large(request: Request) -> bool:
+    try:
+        return int(request.headers.get("content-length", "0")) > MAX_IMAGE_BYTES + 1024 * 1024
+    except ValueError:
+        return False
+
+
+async def _image_part(upload) -> tuple | None | bool:
+    """None = no image chosen, False = not acceptable, else an httpx file tuple."""
+    if upload is None or not getattr(upload, "filename", ""):
+        return None
+    if (upload.content_type or "") not in IMAGE_TYPES:
+        return False
+    data = await upload.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        return False
+    return (upload.filename, data, upload.content_type)
+
+
+LIBRARY_KINDS = ("pptx", "code", "quiz", "image", "source_video", "generated_video", "video", "audio", "theme")
+
+
+async def library_page(request: Request):
+    """My Library: the hub. Every project (lessons, presentations, courses) and every asset this teacher
+    saved or generated in any studio, with filters by type and room and actions to use an item elsewhere."""
+    user = require_user(request, "teacher")
+    kind = request.query_params.get("kind", "")
+    kind = kind if kind in LIBRARY_KINDS else ""
+    room_filter = request.query_params.get("room", "")[:60]
+    params = {k: v for k, v in {"kind": kind, "room_id": room_filter}.items() if v}
+    assets_res, rooms_res, sessions_res, decks_res, courses_res = await gather(
+        api(request).get("/teacher/assets", token=user["token"], params=params, timeout=60),
+        api(request).get("/rooms", token=user["token"]),
+        api(request).get("/teacher/sessions", token=user["token"], params={"teacher_id": user["user_id"]}),
+        api(request).get("/teacher/decks", token=user["token"], timeout=60),
+        api(request).get("/teacher/courses", token=user["token"], timeout=60))
+    for res in (assets_res, rooms_res):
+        ensure_session(request, res)
+    rooms = rooms_res.get("rooms", [])
+    return render(request, "library.html", res=assets_res, assets=assets_res.get("assets", []), rooms=rooms, room=None,
+                  tab="library", kind=kind, room_filter=room_filter, kinds=LIBRARY_KINDS,
+                  room_names={r["room_id"]: r["name"] for r in rooms},
+                  lessons=sessions_res.get("sessions", [])[:8], decks=decks_res.get("decks", [])[:8],
+                  courses=courses_res.get("courses", [])[:8])
+
+
+async def asset_file(request: Request):
+    """Streams one of the teacher's stored files to the browser (?download=1 saves it instead of showing it)."""
+    user = require_user(request, "teacher")
+    res = await api(request).get(f"/teacher/assets/{quote(request.path_params['asset_id'], safe='')}/file",
+                                 token=user["token"], timeout=60)
+    if not res.ok:
+        raise HTTPException(status_code=404, detail="asset")
+    headers = {"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"}
+    if request.query_params.get("download"):
+        headers["Content-Disposition"] = res.headers.get("content-disposition", "attachment")
+    return Response(res.content, media_type=res.headers.get("content-type", "application/octet-stream"), headers=headers)
+
+
 # ---------------------------------------------------------------- profile
 
 async def profile_page(request: Request):
@@ -307,3 +373,86 @@ async def profile_save(request: Request):
     ensure_session(request, res)
     flash(request, "success" if res.ok else "error", tr(request, "profile.saved") if res.ok else api_message(request, res))
     return redirect(request, "/profile")
+
+
+async def profile_avatar_save(request: Request):
+    """The presenter image used as the first frame of the teacher's animated videos."""
+    user = require_user(request, "teacher")
+    if _image_too_large(request):
+        flash(request, "warning", tr(request, "video.bad_image"))
+        return redirect(request, "/profile")
+    form = await check_csrf(request)
+    image = await _image_part(form.get("image"))
+    if not image:
+        flash(request, "warning", tr(request, "video.bad_image"))
+        return redirect(request, "/profile")
+    res = await api(request).post("/teacher/avatar", token=user["token"], data={"teacher_id": user["user_id"]},
+                                  files={"image": image}, timeout=60)
+    ensure_session(request, res)
+    flash(request, "success" if res.ok else "error",
+          tr(request, "profile.avatar_saved") if res.ok else api_message(request, res))
+    return redirect(request, "/profile")
+
+
+async def profile_avatar(request: Request):
+    user = require_user(request, "teacher")
+    res = await api(request).get(f"/teacher/avatar/{quote(user['user_id'], safe='')}", token=user["token"])
+    if not res.ok:
+        raise HTTPException(status_code=404, detail="avatar")
+    return Response(res.content, media_type=res.headers.get("content-type", "image/jpeg"),
+                    headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------- parent report
+
+async def parent_report_page(request: Request):
+    user, room, rooms = await load_room(request, request.path_params["room_id"], "teacher")
+    uid = request.path_params["user_id"]
+    res = await api(request).get(f"/teacher/rooms/{room['room_id']}/students/{quote(uid, safe='')}/parent-report",
+                                 token=user["token"])
+    ensure_session(request, res)
+    share_url = ""
+    if res.ok and res.data.get("share_token"):
+        share_url = f"{request.url.scheme}://{request.url.netloc}" + u(request, f"/p/{res.data['share_token']}")
+    return render(request, "room/parent_report.html", room=room, rooms=rooms, tab="students",
+                  report_res=res, share_url=share_url)
+
+
+async def parent_report_shared(request: Request):
+    res = await api(request).get(f"/parent-report/{quote(request.path_params['token'], safe='')}")
+    return render(request, "parent/shared.html", report=res.data if res.ok else None,
+                  status=200 if res.ok else 404)
+
+
+# ---------------------------------------------------------------- inbox
+
+async def inbox_page(request: Request):
+    user, room, rooms = await load_room(request, request.path_params["room_id"], "teacher")
+    res = await api(request).get(f"/rooms/{room['room_id']}/inbox", token=user["token"])
+    ensure_session(request, res)
+    return render(request, "room/inbox.html", room=room, rooms=rooms, tab="inbox", inbox_res=res)
+
+
+async def inbox_draft(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    await check_csrf(request)
+    qid = request.path_params["question_id"]
+    res = await api(request).post(f"/rooms/{room['room_id']}/inbox/{quote(qid, safe='')}/draft",
+                                  token=user["token"], timeout=90)
+    ensure_session(request, res)
+    if not res.ok:
+        return notice(request, api_message(request, res), "warning")
+    return render(request, "partials/inbox_draft.html", question_id=qid, draft=res.data["draft_reply"])
+
+
+async def inbox_answer(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    form = await check_csrf(request)
+    text = str(form.get("answer", "")).strip()
+    qid = request.path_params["question_id"]
+    if text:
+        res = await api(request).post(f"/rooms/{room['room_id']}/inbox/{quote(qid, safe='')}/answer",
+                                      token=user["token"], json={"answer": text[:4000]})
+        ensure_session(request, res)
+        flash(request, "success" if res.ok else "error", tr(request, "inbox.sent") if res.ok else api_message(request, res))
+    return redirect(request, f"/rooms/{room['room_id']}/inbox")

@@ -1,6 +1,15 @@
-/* The tutor agent's small enhancements: answer the 3 MCQ in the page, flip flashcards. No server calls. */
+/* The tutor agent's small enhancements: answer the 3 MCQ in the page, flip flashcards. The only server call is the quiz result (for the progress page). */
 (function () {
   'use strict';
+
+  // The finished quiz is a result for the student's progress (once per quiz): the server gives it to M4.
+  function sendResult(quiz, correct, total) {
+    if (quiz.dataset.sent || !quiz.dataset.topic || !quiz.dataset.resultUrl) return;
+    quiz.dataset.sent = '1';
+    var csrf = (document.body.getAttribute('hx-headers') || '').match(/"X-CSRF-Token":\s*"([^"]+)"/);
+    var data = new URLSearchParams({ topic: quiz.dataset.topic, correct: correct, total: total });
+    fetch(quiz.dataset.resultUrl, { method: 'POST', body: data, credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf ? csrf[1] : '' } }).catch(function () {});
+  }
 
   document.addEventListener('click', function (event) {
     var opt = event.target.closest('.tq-opt');
@@ -29,6 +38,7 @@
       if (done.length === all.length) {
         var n = quiz.querySelectorAll('.tq-q[data-score]').length;
         quiz.querySelector('.tq-score').textContent = quiz.dataset.msgScore.replace('{n}', n).replace('{total}', all.length);
+        sendResult(quiz, n, all.length);
       }
       return;
     }

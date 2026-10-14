@@ -27,7 +27,7 @@
 
 <aside class="sidebar" aria-label="{{ t('nav.rooms') }}">
   <nav class="side-nav">
-    <a class="nav-link {% if not room and tab != 'profile' %}active{% endif %}" href="{{ u('/rooms') }}">{{ icon('door') }}<span>{{ t('nav.rooms') }}</span></a>
+    <a class="nav-link {% if not room and tab not in ('profile', 'library', 'studio', 'video', 'presentations', 'media', 'story', 'learning') %}active{% endif %}" href="{{ u('/rooms') }}">{{ icon('door') }}<span>{{ t('nav.rooms') }}</span></a>
   </nav>
   {% if room %}
   <div class="side-label">{{ t('nav.this_room') }}</div>
@@ -37,9 +37,9 @@
   </div>
   <nav class="side-nav" aria-label="{{ room.name }}">
     {% if user.role == 'teacher' %}
-      {% set tabs = [('overview','dashboard'), ('materials','folder'), ('students','users'), ('insights','chart'), ('studio','sparkle')] %}
+      {% set tabs = [('overview','dashboard'), ('materials','folder'), ('students','users'), ('inbox','chat'), ('insights','chart')] %}
     {% else %}
-      {% set tabs = [('study','chat'), ('study-files','file'), ('materials','folder'), ('practice','quiz'), ('progress','trend')] %}
+      {% set tabs = [('study','chat'), ('study-files','file'), ('materials','folder'), ('practice','quiz'), ('progress','trend'), ('learn','book')] %}
     {% endif %}
     {% for key, ic in tabs %}
     <a class="nav-link {% if tab == key %}active{% endif %}" href="{{ u('/rooms/' ~ room.room_id ~ '/' ~ key) }}" {% if tab == key %}aria-current="page"{% endif %}>{{ icon(ic) }}<span>{{ t('tab.' ~ key) }}</span></a>
@@ -47,6 +47,14 @@
   </nav>
   {% endif %}
   {% if user.role == 'teacher' %}
+  {% set nq = nav_q or ({'room': room.room_id} if room else {}) %}
+  <div class="side-label">{{ t('nav.studios') }}</div>
+  <nav class="side-nav" aria-label="{{ t('nav.studios') }}">
+    {% for key, ic in [('studio','sparkle'), ('video','search'), ('presentations','presentation'), ('media','image'), ('story','film'), ('learning','book'), ('library','folder')] %}
+    {% set href = u('/rooms/' ~ room.room_id ~ '/studio') if (key == 'studio' and room) else (u('/library') if key == 'library' else u('/' ~ key, **nq)) %}
+    <a class="nav-link {% if tab == key %}active{% endif %}" href="{{ href }}" {% if tab == key %}aria-current="page"{% endif %}>{{ icon(ic) }}<span>{{ t('nav.' ~ key) }}</span></a>
+    {% endfor %}
+  </nav>
   <nav class="side-nav side-bottom">
     <a class="nav-link {% if tab == 'profile' %}active{% endif %}" href="{{ u('/profile') }}">{{ icon('settings') }}<span>{{ t('nav.profile') }}</span></a>
   </nav>

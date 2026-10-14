@@ -54,6 +54,7 @@ class Conflict(PlatformError):
 
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I, easy to read aloud
 _PBKDF2_ROUNDS = 120_000
+TOKEN_DAYS = 30  # a login lasts a month; the demo accounts' fixed tokens never expire
 DEMO_PASSWORD = "rafeeq-demo"
 DEMO_ACCOUNTS = [
     # user_id, name, email, role, fixed token (keeps the old DEMO_USER token working)
@@ -108,6 +109,19 @@ def clear_upload_hooks() -> None:
     _UPLOAD_HOOKS.clear()
 
 
+# ---------------------------------------------------------------- delete hooks
+# M2 removes a deleted file from its index:  service.on_delete(lambda room_id, file_id: ...)
+_DELETE_HOOKS: list = []
+
+
+def on_delete(fn) -> None:
+    _DELETE_HOOKS.append(fn)
+
+
+def clear_delete_hooks() -> None:
+    _DELETE_HOOKS.clear()
+
+
 # ---------------------------------------------------------------- store
 
 
@@ -123,7 +137,7 @@ class PlatformStore:
 
     # -- persistence
     def _load(self) -> dict:
-        empty = {"users": {}, "tokens": {}, "rooms": {}, "members": {}, "files": {}, "questions": []}
+        empty = {"users": {}, "tokens": {}, "token_times": {}, "rooms": {}, "members": {}, "files": {}, "questions": []}
         if not self.path.exists():
             return empty
         data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -182,6 +196,7 @@ class PlatformStore:
             self.db["users"][user["user_id"]] = user
             token = secrets.token_urlsafe(24)
             self.db["tokens"][token] = user["user_id"]
+            self.db["token_times"][token] = _now().isoformat()
             if room is not None:
                 self._add_member(room["room_id"], user["user_id"])
             self._save()
@@ -194,11 +209,15 @@ class PlatformStore:
         with self._lock:
             token = secrets.token_urlsafe(24)
             self.db["tokens"][token] = user["user_id"]
+            self.db["token_times"][token] = _now().isoformat()
             self._save()
         return self._login_payload(user, token)
 
     def user_for_token(self, token: str | None) -> dict | None:
         user_id = self.db["tokens"].get(token or "")
+        issued = self.db["token_times"].get(token or "")
+        if user_id and issued and issued < (_now() - timedelta(days=TOKEN_DAYS)).isoformat():
+            return None  # expired: log in again (tokens without a time are the demo accounts' fixed ones)
         return self.db["users"].get(user_id) if user_id else None
 
     # -- rooms
@@ -308,6 +327,27 @@ class PlatformStore:
                     self._save()
                     return
         raise NotFound("File not found")
+
+    def delete_file(self, user: dict, room_id: str, file_id: str) -> None:
+        """Only the room's teacher. Removes the record and the stored file, then tells the delete
+        hooks (M2's index). A hook failure is logged in the record list, never undoes the delete."""
+        self._owned_room(user, room_id)
+        with self._lock:
+            files = self.db["files"].get(room_id, [])
+            record = next((f for f in files if f["file_id"] == file_id), None)
+            if record is None:
+                raise NotFound("File not found")
+            files.remove(record)
+            self._save()
+        try:
+            Path(record["path"]).unlink(missing_ok=True)
+        except OSError:
+            pass  # the record is gone; a locked file on Windows can be cleaned up later
+        for hook in list(_DELETE_HOOKS):
+            try:
+                hook(room_id, file_id)
+            except Exception:  # the file is deleted for the user either way
+                pass
 
     def file_path(self, room_id: str, file_id: str) -> Path:
         for f in self.db["files"].get(room_id, []):

@@ -53,3 +53,34 @@ def test_odd_reader_output_is_normalised():
     clients.connect("read_image", lambda data: {"type": "selfie", "language": "fr", "confidence": "high"})
     result = read_snap(png_bytes())
     assert result["type"] == "other" and result["language"] == "ar" and 0 <= result["confidence"] <= 1
+
+
+def test_a_tilted_page_is_found_and_flattened():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from rafeeq.snap.cleaner import clean, find_page
+
+    img = np.zeros((800, 600, 3), np.uint8)
+    corners = np.array([[100, 120], [500, 90], [540, 700], [80, 680]])
+    cv2.fillPoly(img, [corners], (255, 255, 255))
+    quad = find_page(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+    assert quad is not None and np.allclose(quad, corners, atol=8)
+    out, _ = clean(cv2.imencode(".png", img)[1].tobytes())
+    flat = cv2.imdecode(np.frombuffer(out, np.uint8), cv2.IMREAD_GRAYSCALE)
+    assert flat.shape[0] > flat.shape[1] and flat.mean() > 200   # mostly the white page, upright
+
+
+def test_the_phone_rotation_tag_is_applied():
+    pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    Image = pytest.importorskip("PIL.Image")
+    import io
+
+    from rafeeq.snap.cleaner import _decode_upright
+
+    wide = Image.fromarray(np.zeros((100, 300, 3), np.uint8))   # stored landscape...
+    exif = Image.Exif()
+    exif[0x0112] = 6                                            # ...with "rotate 90°" (portrait photo)
+    buf = io.BytesIO()
+    wide.save(buf, format="JPEG", exif=exif)
+    assert _decode_upright(buf.getvalue()).shape[:2] == (300, 100)

@@ -98,3 +98,20 @@
 .t-on_track { background: var(--t-green); }
 .t-watch { background: var(--t-amber); }
 .t-struggling { background: var(--t-red); }
+
+/* video discovery (YouTube) */
+.yt-wrap { margin-block-end: 1rem; }
+.yt-player { border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 16 / 9; inline-size: 100%; }
+.yt-controls { margin-block-start: .6rem; }
+.yt-list { margin-block-start: .5rem; }
+.yt-result { cursor: pointer; align-items: center; }
+.yt-result:hover { background: #fbfcff; }
+.yt-result.yt-active { background: #eef1fb; border-radius: 10px; }
+.yt-thumb { inline-size: 120px; block-size: 68px; object-fit: cover; border-radius: 8px; flex: none; }
+
+/* video generation (Lab 5) */
+.t-ok-box { border-color: var(--t-green); background: #f3fbf6; }
+video.yt-player { display: block; margin-block: .5rem; background: #000; }
+
+/* teacher avatar (Lab 5 persona) */
+.t-avatar-preview { display: block; inline-size: 96px; block-size: 96px; object-fit: cover; border-radius: 10px; margin-block: .4rem; border: 1px solid var(--line); }

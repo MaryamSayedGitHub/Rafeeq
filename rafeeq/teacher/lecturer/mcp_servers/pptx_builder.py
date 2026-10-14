@@ -10,6 +10,8 @@ The lecturer's name, the course and the slide number are in the footer of every 
 """
 
 import re
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from pptx import Presentation
@@ -44,6 +46,49 @@ MAX_CODE_LINES = 22
 _ARABIC = re.compile(r"[؀-ۿ]")
 
 
+# ------------------------------------------------------------------ themes
+# The palette is module-level so the helpers above stay simple. build_presentation() swaps it
+# for the deck's theme under a lock and puts the default back afterwards.
+_THEME_LOCK = threading.Lock()
+_THEME_GLOBALS = {"ink": "INK", "ink_soft": "INK_SOFT", "paper": "PAPER", "line": "LINE", "blue": "BLUE",
+                  "blue_soft": "BLUE_SOFT", "yellow": "YELLOW", "green": "GREEN", "green_soft": "GREEN_SOFT",
+                  "code_bg": "CODE_BG", "code_text": "CODE_TEXT"}
+
+
+@contextmanager
+def _themed(theme: dict | None):
+    if not theme:
+        yield
+        return
+    from rafeeq.teacher.themes import normalize
+
+    theme = normalize(theme)
+    with _THEME_LOCK:
+        names = list(_THEME_GLOBALS.values()) + ["FONT"]
+        saved = {name: globals()[name] for name in names}
+        try:
+            for key, name in _THEME_GLOBALS.items():
+                globals()[name] = RGBColor.from_string(theme["colors"][key][1:])
+            globals()["FONT"] = theme["font"]
+            yield
+        finally:
+            globals().update(saved)
+
+
+def _picture(slide, path, x: float, y: float, w: float, max_h: float) -> bool:
+    """Put an image in the box, keeping its proportions. A missing or damaged file is skipped."""
+    try:
+        pic = slide.shapes.add_picture(str(path), Inches(x), Inches(y), width=Inches(w))
+    except Exception:
+        return False
+    limit = Inches(max_h)
+    if pic.height > limit:
+        scale = limit / pic.height
+        pic.width, pic.height = int(pic.width * scale), limit
+        pic.left = Inches(x) + int((Inches(w) - pic.width) / 2)
+    return True
+
+
 # ----------------------------------------------------------------- helpers
 def _rect(slide, x, y, w, h, fill, line=None, shape=MSO_SHAPE.RECTANGLE):
     box = slide.shapes.add_shape(shape, Inches(x), Inches(y), Inches(w), Inches(h))
@@ -58,9 +103,10 @@ def _rect(slide, x, y, w, h, fill, line=None, shape=MSO_SHAPE.RECTANGLE):
     return box
 
 
-def _style(paragraph, text, size, color, bold=False, font=FONT, align=None):
+def _style(paragraph, text, size, color, bold=False, font=None, align=None):
     """Write `text` into a paragraph. Arabic text is right-aligned and marked right-to-left."""
     text = str(text)
+    font = font or FONT
     is_arabic = bool(_ARABIC.search(text)) and font != FONT_CODE
     run = paragraph.add_run()
     run.text = text
@@ -73,7 +119,7 @@ def _style(paragraph, text, size, color, bold=False, font=FONT, align=None):
         paragraph._p.get_or_add_pPr().set("rtl", "1")
 
 
-def _text(slide, x, y, w, h, text, size, color, bold=False, font=FONT, align=None,
+def _text(slide, x, y, w, h, text, size, color, bold=False, font=None, align=None,
           anchor=MSO_ANCHOR.TOP):
     box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     frame = box.text_frame
@@ -93,9 +139,9 @@ def _label(shape, text, size, color, bold=False, align=PP_ALIGN.CENTER):
     _style(frame.paragraphs[0], text, size, color, bold, align=align)
 
 
-def _new_slide(prs, background=PAPER):
+def _new_slide(prs, background=None):
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # 6 = blank
-    _rect(slide, 0, 0, W, H, background)
+    _rect(slide, 0, 0, W, H, background or PAPER)
     return slide
 
 
@@ -173,7 +219,11 @@ def _content(prs, item: dict, meta: dict, number: int, total: int) -> None:
     bullets = [str(b) for b in item.get("bullets", [])]
     steps = [s for s in item.get("diagram_steps") or [] if str(s).strip()]
     body_y, full_w = 2.05, W - 2 * MARGIN
-    if len(steps) >= 2:
+    image = item.get("image_path")
+    if image and Path(str(image)).is_file() and _picture(  # a picture takes the place of the small diagram
+            slide, image, MARGIN + full_w * 0.62, body_y - 0.05, full_w * 0.38, 4.5):
+        _bullets(slide, bullets, MARGIN, body_y, full_w * 0.56)
+    elif len(steps) >= 2:
         _bullets(slide, bullets, MARGIN, body_y, full_w * 0.56)
         _diagram(slide, steps, MARGIN + full_w * 0.62, body_y - 0.05, full_w * 0.38)
     else:
@@ -244,7 +294,7 @@ def _question(prs, q: dict, index: int, reveal: bool, meta: dict, number: int, t
 
 
 # -------------------------------------------------------------------- main
-def build_presentation(output_path: str | Path, deck: dict) -> Path:
+def _build_presentation(output_path: str | Path, deck: dict) -> Path:
     """Create the file and return its path.
 
     deck = {
@@ -292,3 +342,10 @@ def build_presentation(output_path: str | Path, deck: dict) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(str(output_path))
     return output_path
+
+
+def build_presentation(output_path: str | Path, deck: dict) -> Path:
+    """Create the file and return its path. `deck` may also carry "theme" (see rafeeq/teacher/themes.py)
+    and, on a content slide, "image_path" (a picture file shown next to the bullets)."""
+    with _themed(deck.get("theme")):
+        return _build_presentation(output_path, deck)

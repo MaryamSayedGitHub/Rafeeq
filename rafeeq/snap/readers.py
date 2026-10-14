@@ -180,7 +180,92 @@ class OllamaReader(BaseReader):
         return r.json()["message"]["content"].strip()
 
 
-READERS = {"easyocr": EasyOCRReader, "paddleocr": PaddleOCRReader, "gemini": GeminiReader,
+GROQ_URL = "https://api.groq.com/openai/v1"
+GROQ_VISION = "qwen/qwen3.8-27b"        # the team guide's Groq model (it accepts images); SNAP_VISION_MODEL overrides it
+
+
+def _endpoint() -> tuple[str, str, str] | None:
+    """(url, key, model) of the hosted model that reads photos: M1's LLM_* when really filled in, else the team's Groq key. None = nothing hosted."""
+    key = os.getenv("LLM_API_KEY", "").strip()
+    if key and not key.lower().startswith("put-your"):
+        return (os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/"), key,
+                os.getenv("SNAP_VISION_MODEL") or os.getenv("LLM_MODEL", "gpt-4o-mini"))
+    if os.getenv("GROQ_API_KEY"):
+        return GROQ_URL, os.environ["GROQ_API_KEY"], os.getenv("SNAP_VISION_MODEL") or GROQ_VISION
+    return None
+
+
+class HostedReader(BaseReader):
+    """A hosted vision model (any OpenAI-compatible endpoint that accepts images): M1's LLM_API_KEY / LLM_BASE_URL / LLM_MODEL,
+    or else the team's GROQ_API_KEY. No local model to run. SNAP_VISION_MODEL picks another image model on the same endpoint."""
+    name = "hosted"
+    use_lines = True
+
+    def __init__(self, model: str | None = None):
+        found = _endpoint()
+        if not found:
+            raise RuntimeError("no hosted model: set LLM_API_KEY (or GROQ_API_KEY)")
+        base, self.key, self.model = found
+        self.model = model or self.model
+        self.url = base + "/chat/completions"
+
+    def _ask(self, img, text: str) -> str:
+        import base64
+        import requests
+        b64 = base64.b64encode(_png_bytes(img)).decode()
+        body = {"model": self.model, "temperature": 0,
+                "messages": [{"role": "user", "content": [{"type": "text", "text": text},
+                                                          {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}]}]}
+        for attempt in range(4):                               # a rate limit or a busy model: wait as long as the server says, then ask again
+            r = requests.post(self.url, headers={"Authorization": f"Bearer {self.key}"}, json=body, timeout=120)
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < 3:
+                m = re.search(r"try again in ([\d.]+)(ms|s)", r.text)
+                wait = (float(m.group(1)) / (1000 if m.group(2) == "ms" else 1) + 1) if m else 2 ** attempt * 2
+                time.sleep(min(wait, 30))
+                continue
+            r.raise_for_status()
+            break
+        return re.sub(r"<think>.*?</think>", "", r.json()["choices"][0]["message"]["content"] or "", flags=re.S).strip()
+
+    def read(self, img):
+        return self._ask(img, prompt())
+
+    def read_many(self, crops: list) -> list[str]:
+        """All the lines of a page in ONE request: the crops are stacked (numbered) into one image. A free hosted plan allows only a few
+        thousand input tokens a minute, and one request per line used them up after three lines."""
+        if len(crops) <= 1:
+            return [self.read(c) for c in crops]
+        import json
+        width = max(c.shape[1] for c in crops)
+        rows = []
+        for i, c in enumerate(crops, 1):
+            c = c if c.ndim == 3 else cv2.cvtColor(c, cv2.COLOR_GRAY2BGR)
+            pad = np.full((c.shape[0] + 36, width + 90, 3), 255, np.uint8)
+            pad[30:30 + c.shape[0], 80:80 + c.shape[1]] = c
+            cv2.putText(pad, str(i), (4, 30 + c.shape[0] // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            cv2.line(pad, (0, pad.shape[0] - 1), (pad.shape[1], pad.shape[0] - 1), (160, 160, 160), 1)
+            rows.append(pad)
+        text = (f"This image has {len(crops)} handwritten lines stacked top to bottom, each marked with a red number on its left. "
+                + prompt().replace("Output only the transcription.", "") +
+                f' Reply with JSON only: {{"lines": ["text of line 1", ..., "text of line {len(crops)}"]}} - exactly {len(crops)} strings, in order, '
+                "an empty string for a line with no text.")
+        out = self._ask(np.vstack(rows), text)
+        try:
+            lines = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", out)).get("lines")
+        except Exception:                                      # noqa: BLE001
+            lines = None
+        if not isinstance(lines, list) or not lines:
+            lines = [l for l in out.splitlines() if l.strip()]
+        lines = [str(l).strip() for l in lines][:len(crops)]
+        return lines + [""] * (len(crops) - len(lines))
+
+
+def default_reader() -> str:
+    """SNAP_READER if set; else the hosted model when there is a key for one (the normal setup); else local Ollama."""
+    return os.getenv("SNAP_READER") or ("hosted" if _endpoint() else "ollama")
+
+
+READERS = {"hosted": HostedReader, "easyocr": EasyOCRReader, "paddleocr": PaddleOCRReader, "gemini": GeminiReader,
            "qwen": QwenVLReader, "ollama": OllamaReader}
 _CACHE: dict[str, BaseReader] = {}
 

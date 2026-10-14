@@ -15,9 +15,9 @@ from starlette.concurrency import run_in_threadpool
 
 from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
-from rafeeq.tutor import chats, export, memory, study_store
+from rafeeq.tutor import chats, events, export, memory, study_store
 from rafeeq.web.common import api, api_message, check_csrf, current_user, flash, lang_of, notice, redirect, render, tr
 from rafeeq.web.i18n import strip_isolates
 from rafeeq.web.i18n import strip_isolates as _strip
@@ -75,7 +75,7 @@ async def agent_action(request: Request):
     if not out["ok"] and action in ("hint", "solution"):           # an unknown key: say so instead of an empty hint
         return notice(request, tr(request, "tutor.tool_fail"), "warning")
     ctx = dict(room=room, out=out, r=out["result"], turn_id=secrets.token_hex(4), question=text, key=body.get("key", ""),
-               formats=list(export.FORMATS))
+               formats=list(export.FORMATS), quiz_topic=body.get("topic_id") or "")
     if action == "research":
         return render(request, "partials/tutor_study_turn.html", pages=body["pages"], **ctx)
     if action == "quiz":
@@ -87,6 +87,18 @@ async def agent_action(request: Request):
     if action == "rewrite":
         return render(request, "partials/tutor_rewrite.html", **ctx)
     return render(request, "partials/tutor_hint.html" if action == "hint" else "partials/tutor_solution.html", **ctx)
+
+
+async def quiz_result(request: Request):
+    """The student finished the quiz shown in the chat: correct/total is a result for M4, so the Progress page follows it."""
+    user, room, _ = await load_room(request, request.path_params["room_id"], "student")
+    form = await check_csrf(request)
+    total, correct = _int(form.get("total"), 0), _int(form.get("correct"), -1)
+    topic = str(form.get("topic", ""))[:80]
+    if not 1 <= total <= 10 or not 0 <= correct <= total:
+        raise HTTPException(status_code=422)
+    saved = await run_in_threadpool(events.record_quiz, user["user_id"], room["room_id"], topic, correct, total)
+    return JSONResponse({"saved": saved})
 
 
 # ---------------------------------------------------------------- the room's study files
@@ -219,7 +231,9 @@ async def study_page(request: Request):
     wanted = request.query_params.get("chat", "")
     saved = chats.turns(uid, rid, wanted) if chats.valid(wanted) else []
     cid = wanted if saved else chats.new_id()
-    return render(request, "room/study.html", room=room, rooms=rooms, tab="study", prefill=_strip(request.query_params.get("q", ""))[:500],
+    inbox_res = await api(request).get(f"/rooms/{rid}/inbox", token=user["token"])                  # the teacher's answers to this student's questions
+    my_questions = inbox_res.data.get("questions", [])[:6] if inbox_res.ok else []
+    return render(request, "room/study.html", room=room, rooms=rooms, tab="study", my_questions=my_questions, prefill=_strip(request.query_params.get("q", ""))[:500],
                   chat_id=cid, saved=saved, chat_list=chats.list_chats(uid, rid), notes=memory.notes(uid), recent=memory.recent_topics(uid, rid))
 
 

@@ -1,6 +1,6 @@
 """Snap & Ask: a photo -> the text on it, what kind of photo it is, and where every line sits (contracts: SnapResult).
 
-OpenCV cleans the photo and finds the text lines, a vision-language model reads each line (SNAP_READER = ollama | gemini).
+OpenCV cleans the photo and finds the text lines, a vision-language model reads each line (SNAP_READER = hosted | ollama | gemini; hosted is the default when LLM_API_KEY is set).
 The cleaned page image and the line boxes are saved under data/snap/<file_id>.*, so /tutor/check-work can box the REAL wrong line.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ import numpy as np
 
 from .pipeline import run_pipeline
 from .preprocess import quality_check
-from .readers import get_reader
+from .readers import default_reader, get_reader
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -67,9 +67,9 @@ def read_photo(data: bytes, room_id: str | None = None) -> tuple[dict, dict]:
         return ({"file_id": file_id, "type": "other", "language": "ar", "text": "", "confidence": 0.0},
                 {"quality_ok": False, "retake_tip": tip, "lines": [], "boxes": []})
     try:
-        res = run_pipeline(img, get_reader(os.getenv("SNAP_READER", "ollama")), "pre_gray", force_lines=True)
+        res = run_pipeline(img, get_reader(default_reader()), "pre_gray", force_lines=True)
     except Exception as e:                                         # noqa: BLE001  (model not running, no key...)
-        raise SnapError(f"The handwriting reader is not available ({type(e).__name__}). Start Ollama with the vision model, or set SNAP_READER.") from e
+        raise SnapError(f"The handwriting reader is not available ({type(e).__name__}). Check LLM_API_KEY / LLM_MODEL (the model must accept images), or run Ollama with the vision model and set SNAP_READER=ollama.") from e
     pairs = [(b, l.strip()) for b, l in zip(res["boxes"], res["lines"]) if l.strip()]
     boxes = [b for b, _ in pairs]
     lines = [l for _, l in pairs]

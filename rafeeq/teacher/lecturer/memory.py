@@ -41,7 +41,13 @@ def open_memory() -> Iterator[tuple]:
         open=False,
         kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
     )
-    pool.open(wait=True, timeout=15)
+    try:
+        pool.open(wait=True, timeout=5)
+    except Exception:
+        # Postgres is not reachable: stop the pool's worker threads right away,
+        # otherwise they keep retrying in the background and block shutdown.
+        pool.close(timeout=1)
+        raise
     try:
         checkpointer = PostgresSaver(pool)
         store = PostgresStore(pool)

@@ -18,6 +18,7 @@ tool the same answer shape: {"action", "ok", "error", "result"}. A tool that fai
 from __future__ import annotations
 
 import logging
+import re
 from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
@@ -25,7 +26,7 @@ from langgraph.graph import END, START, StateGraph
 from . import extras, lookup, memory, quiz, safety, study_store
 from . import help as tutor_help
 from .agent import run_check, run_qa
-from .answer import guess_language, keeps_english_terms
+from .answer import _DETAIL, guess_language, keeps_english_terms
 from .grading import classify
 from .research import WORDS_PER_PAGE
 from .search import search_with_source
@@ -77,7 +78,8 @@ def _web_term(s: "TState", out: dict, photo: bool) -> bool:
     """M2 had nothing: answer from the web right here, short, with its sources, and NO study file (Level 2 is the deeper file).
     A question is searched as it is; a photo only when it holds a short term (anything longer becomes a study file)."""
     term = lookup.term_of(s["text"], photo)
-    query = term or ("" if photo else " ".join(s["text"].split())[:150])
+    term = re.sub(r"\s+", " ", _DETAIL.sub(" ", term)).strip() if term else term                  # "in detail" asks for a longer answer, it is not part of what is searched
+    query = term or ("" if photo else re.sub(r"\s+", " ", _DETAIL.sub(" ", s["text"])).strip()[:150])
     if not query:
         return False
     try:
@@ -87,7 +89,8 @@ def _web_term(s: "TState", out: dict, photo: bool) -> bool:
         return False
     if not found:
         return False
-    out.update(answer=found["answer"], grounded=True, citations=[], steps=[], web_sources=found["web_sources"], material_source="web",
+    lead = ("لم أجد هذا في المنهج، فبحثتُ في النت:" if out["language"] == "ar" else "I did not find this in the course material, so I searched the web:")
+    out.update(answer=lead + "\n\n" + found["answer"], grounded=True, citations=[], steps=[], web_sources=found["web_sources"], material_source="web",
                offer_level2=True, citation_support="none", answer_flagged=False, error=None)
     study_store.update_question(out["question_id"], grounded=True, engine="web", level=2)
     return True

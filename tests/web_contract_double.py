@@ -28,11 +28,31 @@ def _validator(name):
     return Draft202012Validator({"$ref": f"#/components/schemas/{name}", "components": SPEC["components"]})
 
 
+class _DictStore:
+    """Just enough of a LangGraph store (put / search) for the inbox routes."""
+
+    class _Item:
+        def __init__(self, key, value):
+            self.key, self.value = key, value
+
+    def __init__(self):
+        self.data = {}
+
+    def put(self, namespace, key, value):
+        self.data.setdefault(tuple(namespace), {})[key] = dict(value)
+
+    def search(self, namespace, limit=10, offset=0, **kw):
+        items = [self._Item(k, dict(v)) for k, v in self.data.get(tuple(namespace), {}).items()]
+        return items[offset:offset + limit]
+
+
 class ContractDouble:
     def __init__(self, disabled: set[str] | None = None):
         self.disabled = disabled or set()   # route keys that answer 404 (not implemented yet)
         self.violations: list[str] = []
+        self.video_saved = False            # True: the status route reports the clip as saved in the library
         self.calls: list[tuple[str, str, object]] = []
+        self.class_store = _DictStore()     # M5's store for the inbox routes
         self.app = Starlette(routes=self._routes())
 
     # -- helpers
@@ -107,6 +127,57 @@ class ContractDouble:
             except service.PlatformError as e:
                 return d._err(e)
 
+        async def file_delete(request):
+            try:
+                service.get_store().delete_file(d._user(request), request.path_params["room_id"], request.path_params["file_id"])
+                return Response(status_code=204)
+            except service.PlatformError as e:
+                return d._err(e)
+
+        async def parent_report(request):
+            from rafeeq.teacher import parent_report as pr
+
+            user = d._user(request)
+            room = service.get_store().db["rooms"].get(request.path_params["room_id"])
+            if user is None or room is None or room["teacher_id"] != user["user_id"]:
+                return JSONResponse({"detail": "Only this room's teacher"}, status_code=403)
+            out = pr.build(None, room["room_id"], request.path_params["user_id"])
+            for e in _validator("ParentReport").iter_errors(out):
+                d.violations.append(f"parent report -> ParentReport: {e.message}")
+            return JSONResponse({**out, "share_token": pr.make_share_token(room["room_id"], request.path_params["user_id"])})
+
+        async def shared_report(request):
+            from rafeeq.teacher import parent_report as pr
+
+            parsed = pr.read_share_token(request.path_params["token"])
+            if parsed is None:
+                return JSONResponse({"detail": "expired"}, status_code=404)
+            return JSONResponse(pr.build(None, *parsed))
+
+        async def inbox_list(request):
+            from rafeeq.teacher import inbox
+
+            user = d._user(request)
+            room = service.get_store().db["rooms"].get(request.path_params["room_id"])
+            if user is None or room is None:
+                return JSONResponse({"detail": "no"}, status_code=403)
+            mine = None if room["teacher_id"] == user["user_id"] else user["user_id"]
+            out = {"questions": inbox.list_questions(room["room_id"], user_id=mine, store=d.class_store)}
+            for e in _validator("InboxQuestions").iter_errors(out):
+                d.violations.append(f"inbox -> InboxQuestions: {e.message}")
+            return JSONResponse(out)
+
+        async def inbox_answer(request):
+            from rafeeq.teacher import inbox
+
+            body = await d._body(request, "InboxAnswerRequest")
+            user = d._user(request)
+            room = service.get_store().db["rooms"].get(request.path_params["room_id"])
+            if user is None or room is None or room["teacher_id"] != user["user_id"]:
+                return JSONResponse({"detail": "Only the teacher"}, status_code=403)
+            saved = inbox.answer(room["room_id"], request.path_params["question_id"], body["answer"], store=d.class_store)
+            return JSONResponse({**saved, "student_name": ""}) if saved else JSONResponse({"detail": "nf"}, status_code=404)
+
         async def students(request):
             try:
                 return JSONResponse(service.get_store().list_students(d._user(request), request.path_params["room_id"]))
@@ -162,6 +233,47 @@ class ContractDouble:
                 d.violations.append("GET /teacher/profile: missing teacher_id")
             return JSONResponse(load_sample("teacher_profile"))
 
+        async def video_generate(request):
+            if (g := d._guard("videos")):
+                return g
+            form = await request.form()
+            d.calls.append((request.method, request.url.path, {k: v for k, v in form.items() if k != "image"}))
+            if len(str(form.get("prompt", ""))) < 3:
+                d.violations.append("POST /teacher/videos/generate: prompt missing")
+            return JSONResponse({**load_sample("video_job"), "used_avatar": form.get("image") is None})
+
+        async def video_status(request):
+            if (g := d._guard("videos")):
+                return g
+            data = load_sample("video_job_status")
+            if d.video_saved:
+                data = {**data, "asset_id": "a_77aa10cd", "file_url": "/teacher/assets/a_77aa10cd/file"}
+            return JSONResponse(data)
+
+        async def assets(request):
+            if (g := d._guard("assets")):
+                return g
+            if request.method == "GET":
+                d.calls.append((request.method, request.url.path, dict(request.query_params)))
+                return JSONResponse(load_sample("assets"))
+            await d._body(request, "AssetCreate")
+            return JSONResponse(load_sample("asset"), status_code=201)
+
+        async def asset_file(request):
+            if (g := d._guard("assets")):
+                return g
+            return Response(b"MP4-BYTES", media_type="video/mp4")
+
+        async def avatar(request):
+            if (g := d._guard("profile")):
+                return g
+            if request.method == "POST":
+                form = await request.form()
+                if not form.get("teacher_id") or form.get("image") is None:
+                    d.violations.append("POST /teacher/avatar: teacher_id and image are required")
+                return JSONResponse(load_sample("avatar_saved"))
+            return Response(b"\x89PNG-AVATAR", media_type="image/png")
+
         async def session_file(request):
             if (g := d._guard("sessions")):
                 return g
@@ -174,6 +286,7 @@ class ContractDouble:
             Route("/rooms/join", join, methods=["POST"]),
             Route("/rooms/{room_id}/join-code", join_code, methods=["GET"]),
             Route("/rooms/{room_id}/files", files, methods=["GET", "POST"]),
+            Route("/rooms/{room_id}/files/{file_id}", file_delete, methods=["DELETE"]),
             Route("/rooms/{room_id}/students", students, methods=["GET"]),
             Route("/snap", snap, methods=["POST"]),
             Route("/copilot/message", copilot, methods=["POST"]),
@@ -185,11 +298,22 @@ class ContractDouble:
             Route("/profile/summary", sample_get("summary", "student_summary", ("room_id",)), methods=["GET"]),
             Route("/teacher/rooms/{room_id}/insights", sample_get("insights", "insights"), methods=["GET"]),
             Route("/teacher/rooms/{room_id}/report", sample_get("report", "class_report"), methods=["GET"]),
+            Route("/teacher/rooms/{room_id}/students/{user_id}/parent-report", parent_report, methods=["GET"]),
+            Route("/parent-report/{token}", shared_report, methods=["GET"]),
+            Route("/rooms/{room_id}/inbox", inbox_list, methods=["GET"]),
+            Route("/rooms/{room_id}/inbox/{question_id}/answer", inbox_answer, methods=["POST"]),
             Route("/teacher/assistant", sample_post("assistant", "TeacherAssistantRequest", "teacher_assistant"), methods=["POST"]),
             Route("/teacher/profile", profile, methods=["GET", "PUT"]),
             Route("/teacher/sessions", sample_get("sessions", "teacher_sessions", ("teacher_id",)), methods=["GET"]),
             Route("/teacher/sessions/{sid}", sample_get("sessions", "lecturer_session"), methods=["GET"]),
             Route("/teacher/sessions/{sid}/files/{name}", session_file, methods=["GET"]),
+            Route("/teacher/videos/search", sample_get("videos", "video_search", ("q",)), methods=["GET"]),
+            Route("/teacher/videos/generate", video_generate, methods=["POST"]),
+            Route("/teacher/videos/generate/{task_id}", video_status, methods=["GET"]),
+            Route("/teacher/assets", assets, methods=["GET", "POST"]),
+            Route("/teacher/assets/{asset_id}/file", asset_file, methods=["GET"]),
+            Route("/teacher/avatar", avatar, methods=["POST"]),
+            Route("/teacher/avatar/{teacher_id}", avatar, methods=["GET"]),
         ] + [
             Route("/teacher/sessions", sample_post("sessions", "LecturerSessionRequest", "lecturer_session"), methods=["POST"]),
             Route("/teacher/sessions/{sid}/decision", sample_post("sessions", "LecturerDecision", "lecturer_session"), methods=["POST"]),

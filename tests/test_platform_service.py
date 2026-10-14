@@ -163,3 +163,48 @@ def test_upload_hook_lets_m2_index_and_report_status(store):
         assert bad["status"] == "failed"
     finally:
         service.clear_upload_hooks()
+
+
+def test_teacher_deletes_a_file_record_disk_copy_and_tells_the_hooks(store):
+    teacher, created = teacher_and_room(store)
+    rid = created["room"]["room_id"]
+    up = store.add_file(teacher, rid, "slides.pptx", b"pptx bytes")
+    path = store.file_path(rid, up["file_id"])
+    calls = []
+    service.on_delete(lambda room_id, file_id: calls.append((room_id, file_id)))
+    try:
+        store.delete_file(teacher, rid, up["file_id"])
+    finally:
+        service.clear_delete_hooks()
+    assert store.list_files(teacher, rid) == {"files": []}
+    assert not path.exists()
+    assert calls == [(rid, up["file_id"])]
+    with pytest.raises(service.NotFound):
+        store.delete_file(teacher, rid, up["file_id"])  # already gone
+
+
+def test_only_the_room_teacher_can_delete_and_a_failing_hook_does_not_undo_it(store):
+    teacher, created = teacher_and_room(store)
+    rid, code = created["room"]["room_id"], created["join_code"]
+    up = store.add_file(teacher, rid, "notes.pdf", b"%PDF-1.4")
+    s = store.user_for_token(store.register("Sara", "sara@x.com", "secret1", "student", code)["token"])
+    with pytest.raises((service.Forbidden, service.NotFound)):
+        store.delete_file(s, rid, up["file_id"])
+    assert len(store.list_files(teacher, rid)["files"]) == 1
+
+    def broken(room_id, file_id):
+        raise RuntimeError("index offline")
+
+    service.on_delete(broken)
+    try:
+        store.delete_file(teacher, rid, up["file_id"])
+    finally:
+        service.clear_delete_hooks()
+    assert store.list_files(teacher, rid) == {"files": []}
+
+
+def test_a_login_token_expires_after_a_month(store):
+    reg = store.register("Sara", "sara2@x.com", "secret1", "student")
+    assert store.user_for_token(reg["token"])["name"] == "Sara"
+    store.db["token_times"][reg["token"]] = "2000-01-01T00:00:00+00:00"
+    assert store.user_for_token(reg["token"]) is None

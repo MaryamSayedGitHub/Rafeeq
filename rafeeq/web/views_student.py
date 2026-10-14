@@ -5,6 +5,7 @@ Materials and the source viewer are shared with teachers and live here too.
 from __future__ import annotations
 
 import secrets
+from urllib.parse import quote
 
 from starlette.requests import Request
 
@@ -30,7 +31,9 @@ def too_large(request: Request) -> bool:
 
 async def study_page(request: Request):
     user, room, rooms = await load_room(request, request.path_params["room_id"], "student")
-    return render(request, "room/study.html", room=room, rooms=rooms, tab="study",
+    inbox_res = await api(request).get(f"/rooms/{room['room_id']}/inbox", token=user["token"])
+    my_questions = inbox_res.data.get("questions", [])[:6] if inbox_res.ok else []
+    return render(request, "room/study.html", room=room, rooms=rooms, tab="study", my_questions=my_questions,
                   prefill=strip_isolates(request.query_params.get("q", ""))[:500])
 
 
@@ -139,6 +142,19 @@ async def materials_upload(request: Request):
     ensure_session(request, res)
     if res.ok:
         flash(request, "success", tr(request, "materials.uploaded", name=upload.filename))
+    else:
+        flash(request, "error", api_message(request, res))
+    return redirect(request, f"/rooms/{room['room_id']}/materials")
+
+
+async def materials_delete(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    await check_csrf(request)
+    file_id = request.path_params["file_id"]
+    res = await api(request).delete(f"/rooms/{room['room_id']}/files/{quote(file_id, safe='')}", token=user["token"])
+    ensure_session(request, res)
+    if res.ok:
+        flash(request, "success", tr(request, "materials.deleted"))
     else:
         flash(request, "error", api_message(request, res))
     return redirect(request, f"/rooms/{room['room_id']}/materials")

@@ -9,7 +9,7 @@ import re
 
 from . import citations as cite
 from . import llm, memory
-from .search import search_with_source
+from .search import TOP_K, search_with_source
 
 NOT_FOUND = {"ar": "لم أجد الإجابة في مواد هذه المادة، لذلك لن أخمّن.", "en": "I could not find this in the course material, so I will not guess."}
 
@@ -38,13 +38,27 @@ def answer_language(question: str) -> str:
     return guess_language(question)
 
 
+_DETAIL = re.compile(r"(?:\bin[\s-]+(?:detail|depth)\b|\bdetailed\b|\bin\s+full\b|\bthorough(?:ly)?\b|\belaborate\b|\bcomprehensive\b|\bat\s+length\b|"
+                     r"بالتفصيل|بتفصيل|تفصيل[يى]|تفصيلا|تفصيلاً|مفصّ?ل[ةه]?|بالتفاصيل|باستفاضة|باستفاضه|بإسهاب|باسهاب|شرح\s+وافي|وافي[ةه]?|بالتفصيل\s+الممل|الممل)", re.I)
+DETAIL_TOP_K = 8
+
+
+def wants_detail(question: str) -> bool:
+    """"explain it in detail" / "بالتفصيل الممل": the student wants the long answer, with more of the material (or of the web)."""
+    return bool(_DETAIL.search(question or ""))
+
+
 def keeps_english_terms(question: str, lang: str) -> bool:
     """An English question answered in Arabic keeps the technical terms in English (the student studies them in English)."""
     return lang == "ar" and guess_language(question) == "en"
 
 
 def _prompt(question: str, chunks: list[dict], lang: str) -> str:
-    ex = "\n".join(f"[{i}] ({c['file_name']} p.{c['page']}) {c['text'][:700]}" for i, c in enumerate(chunks, 1))
+    detail = wants_detail(question)
+    ex = "\n".join(f"[{i}] ({c['file_name']} p.{c['page']}) {c['text'][:1500 if detail else 700]}" for i, c in enumerate(chunks, 1))
+    length = ("the student asked for it IN DETAIL: write a full, well organised explanation (about 350-500 words): what it is, how it works step by step, "
+              "the important points and one example, using every relevant excerpt. Put the main parts in the \"steps\" list too (up to 6). No outside knowledge."
+              if detail else "simple short words (max 120 words). No outside knowledge.")
     name = "Arabic" if lang == "ar" else "English"
     terms = " Keep every technical term in English (Latin letters), the rest in Arabic: write 'mitochondria', not its Arabic spelling." if keeps_english_terms(question, lang) else ""
     who = memory.note()
@@ -57,7 +71,7 @@ Excerpts:
 
 Return JSON only: {{"grounded": true, "answer": "...", "steps": [], "used": [1]}}
 Rules:
-- Write in {name}, simple short words (max 120 words). No outside knowledge.{terms}
+- Write in {name}, {length}{terms}
 - "used" = the excerpt numbers your answer relies on.
 - "steps": leave it [] for a normal answer. Fill it (2-6 short strings) ONLY when the question asks how to do something / for steps / to explain a process.
 - If the excerpts do not contain the answer, return {{"grounded": false, "answer": "", "steps": [], "used": []}}."""
@@ -99,11 +113,11 @@ def tutor_answer(room_id: str, question: str, language: str | None = None, chunk
     lang = language or answer_language(question)
     source = "given"
     if chunks is None:
-        chunks, source = search_with_source(room_id, question, topic_id=topic_id)
+        chunks, source = search_with_source(room_id, question, DETAIL_TOP_K if wants_detail(question) else TOP_K, topic_id=topic_id)
     not_found = {"answer": NOT_FOUND[lang], "citations": [], "grounded": False, "steps": [], "chunks": chunks, "source": source}
     if not chunks or (check_related and not related(question, chunks)):
         return not_found
-    res = llm.ask_json(_prompt(question, chunks, lang))
+    res = llm.ask_json(_prompt(question, chunks, lang), max_tokens=2000 if wants_detail(question) else None)
     if res is None:                                                # no LLM: show the best passage itself, with its source
         best = chunks[0]
         return {"answer": best["text"], "citations": _citations([best]), "grounded": True, "steps": [], "chunks": [best], "source": source,

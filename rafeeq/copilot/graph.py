@@ -36,6 +36,17 @@ def classify_node(s: State) -> dict:
     return {"route": classify(s["text"], bool(s.get("file_id")), s.get("history", []), s.get("mode", "auto"))}
 
 
+_OVERVIEW_WORDS = ("الدرس", "المحاضرة", "المحاضره", "الفصل", "الملف", "الشابتر", "لخص", "لخّص", "ملخص",
+                   "lesson", "lecture", "chapter", "summar", "overview", "the file")
+_NOT_COVERED_EN = "This topic is not covered in the provided course material."
+
+
+def is_overview_request(text: str) -> bool:
+    """"Explain the last lesson", "لخّص المحاضرة": about a whole file, not one fact in it."""
+    t = (text or "").lower()
+    return any(w in t for w in _OVERVIEW_WORDS)
+
+
 def ask_node(s: State) -> dict:
     verified = clients.optional("find_verified", s["room_id"], s["text"])
     if verified:
@@ -45,23 +56,41 @@ def ask_node(s: State) -> dict:
     if answer is None:
         return {"reply": UNAVAILABLE_REPLY, "payload": {"unavailable": True}}
 
-    if source == "live" and s.get("user_id") and answer.get("topic_id"):
-        clients.optional("record_event", {
-            "user_id": s["user_id"], "room_id": s["room_id"], "topic_id": answer["topic_id"],
-            "kind": "question", "text": s["text"], "time": datetime.now(timezone.utc).isoformat(),
-        })
+    if not answer.get("grounded", True) and source == "live" and is_overview_request(s["text"]):
+        # A question about the lesson as a whole has no single passage to retrieve: explain the file instead.
+        overview = clients.optional("overview", s["room_id"], s["text"])
+        if overview:
+            answer = overview
+
+    if source == "live" and s.get("user_id"):
+        topic_id = answer.get("topic_id") or clients.optional("topic_of", s["room_id"], answer.get("citations", []))
+        if topic_id:
+            clients.optional("record_event", {
+                "user_id": s["user_id"], "room_id": s["room_id"], "topic_id": topic_id,
+                "kind": "question", "text": s["text"], "time": datetime.now(timezone.utc).isoformat(),
+            })
 
     if not answer.get("grounded", True):
         ticket = clients.optional("escalate", s["room_id"], s["text"], s.get("user_id"))
         payload = {**answer, "escalated": bool(ticket)}
         if ticket:
             payload["question_id"] = ticket["question_id"]
-        return {"reply": answer.get("answer", ""), "payload": _mark(payload, source)}
+        text = answer.get("answer", "")
+        if text.strip() == _NOT_COVERED_EN:
+            text = ""  # the page already says it in the student's language
+        return {"reply": text, "payload": _mark(payload, source)}
 
     return {"reply": answer["answer"], "payload": _mark(answer, source)}
 
 
 def quiz_node(s: State) -> dict:
+    """The chat suggests WHICH topic to practise and links to the practice page, where the quiz is
+    generated. With M4 connected the topic comes from the student's profile (next_step)."""
+    if clients.is_connected("next_step") and not clients.is_connected("make_quiz"):
+        step, source = clients.call("next_step", s["room_id"], s.get("user_id"))
+        if step is None:
+            return {"reply": UNAVAILABLE_REPLY, "payload": {"unavailable": True}}
+        return {"reply": "جهّزت لك اختبارًا قصيرًا.", "payload": _mark({"topic_id": step.get("topic_id")}, source)}
     quiz, source = clients.call("make_quiz", s["room_id"], None)
     if quiz is None:
         return {"reply": UNAVAILABLE_REPLY, "payload": {"unavailable": True}}

@@ -20,7 +20,7 @@
           <span class="badge badge-green">{{ icon('badge', 14) }}{{ t('answer.verified') }}</span>
         {% endif %}
         {% if p.grounded == false %}
-          <div class="inline-note note-warning">{{ icon('alert', 16) }}<span>{{ t('answer.not_grounded') }}</span></div>
+          {% if not p.escalated %}<div class="inline-note note-warning">{{ icon('alert', 16) }}<span>{{ t('answer.not_grounded') }}</span></div>{% endif %}
           {% if p.escalated %}
             <div class="inline-note">{{ icon('send', 16, 'back') }}<span>{{ t('answer.escalated') }}</span></div>
           {% else %}

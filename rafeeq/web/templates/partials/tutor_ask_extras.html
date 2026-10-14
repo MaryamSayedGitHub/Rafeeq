@@ -32,6 +32,15 @@
   <div id="rw-{{ turn_id }}"></div>
   {% endif %}
 
+  {% if not p.escalated %}
+  <form class="btn-row tq-teacher" hx-post="{{ act_url }}" hx-target="#teacher-{{ turn_id }}" hx-swap="innerHTML">
+    <input type="hidden" name="action" value="teacher">
+    <input type="hidden" name="text" value="{{ shown }}">
+    <button class="btn btn-soft btn-sm" type="submit">{{ icon('send', 16, 'back') }}<span>{{ t('tutor.ask_teacher_btn') }}</span></button>
+  </form>
+  <div id="teacher-{{ turn_id }}"></div>
+  {% endif %}
+
   <div class="tq-offer">
     <h4 class="bubble-sub">{{ icon('sparkle', 16) }} {{ t('tutor.deeper.title') if p.grounded else t('tutor.deeper.offer_title') }}</h4>
     <p class="muted small">{{ t('tutor.deeper.sub') }}</p>

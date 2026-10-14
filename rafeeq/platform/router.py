@@ -5,6 +5,7 @@ Identity: every route reads `Authorization: Bearer <token>` (the token from /aut
 sample, so existing sample-based tests and teammates' stubs keep working.
 """
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Response, UploadFile
 from pydantic import BaseModel, ConfigDict
@@ -116,6 +117,11 @@ def create_room(request: CreateRoomRequest, authorization: str | None = Header(d
     return _run(_store().create_room, user, request.name)
 
 
+@router.put("/rooms/{room_id}")
+def rename_room(room_id: str, request: CreateRoomRequest, authorization: str | None = Header(default=None)):
+    return _run(_store().rename_room, _required_user(authorization), room_id, request.name)
+
+
 @router.post("/rooms/join")
 def join_room(request: JoinRoomRequest, authorization: str | None = Header(default=None)):
     user = _current_user(authorization)
@@ -146,6 +152,13 @@ def list_room_files(room_id: str, authorization: str | None = Header(default=Non
     if user is None:
         return load_sample("room_files")
     return _run(_store().list_files, user, room_id)
+
+
+@router.get("/rooms/{room_id}/files/{file_id}/download")
+def download_room_file(room_id: str, file_id: str, authorization: str | None = Header(default=None)):
+    name, data = _run(_store().read_file, _required_user(authorization), room_id, file_id)
+    return Response(data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name, safe='')}"})
 
 
 @router.delete("/rooms/{room_id}/files/{file_id}", status_code=204)

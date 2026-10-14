@@ -34,6 +34,41 @@ def term_of(text: str, photo: bool = False) -> str | None:
     return term if term and len(words) <= MAX_TERM_WORDS and not re.search(r"[=+*/^]\s*\d|\d\s*[=+*/^]", term) else None
 
 
+# Questions about THIS course (dates, homework, grades, what the teacher said or meant, the course's own material): the web cannot know them.
+_COURSE = re.compile(
+    r"(?:\b(?:(?:final|mid-?term|next|the)\s+exam|mid-?term|(?:the|this|next|final)\s+(?:test|quiz)|(?:in|on|for)\s+the\s+(?:test|exam|quiz)|ask\s+(?:the|my)\s+(?:teacher|professor)|exam\s+(?:date|time|schedule|topics)|deadline|due\s+date|homework\s+(?:is|due|deadline)|my\s+grades?|my\s+marks|syllabus|office\s+hours|"
+    r"my\s+(?:teacher|professor|instructor|doctor)|your\s+course|our\s+course|in\s+(?:the\s+)?(?:lecture|class)|the\s+(?:teacher|professor|instructor)\s+(?:said|mentioned|meant|wants?)|"
+    r"will\s+(?:it|this)\s+(?:come|be)\s+in\s+the\s+exam)\b|"
+    r"ميعاد|معاد|موعد|امتحان|ميد\s?ترم|الميدترم|فاينال|كويز|هيجي\s+في|اختبار\s+(?:الترم|النهائي|النصف)|الواجب|واجب|تسليم|الدرجات|درجات|درجة\s+الاختبار|المنهج|الدكتور|الدكتورة|المدرس|المعلم|المعلّم|الأستاذ|"
+    r"المحاضرة\s+(?:الجاية|القادمة|الماضية)|الشيت|السكشن|الحضور|ساعات\s+مكتب)", re.I)
+
+
+def mentions_course_matter(question: str) -> bool:
+    """Smart routing before the material is searched: "when is the midterm", "will this part be in the test", "اسأل المعلم عن الامتحان" go to the teacher,
+    but "what is an exam in law" or "explain the syllabus of Rome" do not. A keyword is only the cheap first filter; the model decides. No model: the keyword decides."""
+    q = question or ""
+    if not _COURSE.search(q):
+        return False
+    res = llm.ask_json(f"""A student of a course wrote: {q[:400]}
+Is the student asking about THIS course's own matters that only their teacher can answer: when or where an exam/quiz/midterm/final is, what it covers, whether a topic
+will be included in the exam, homework, deadlines, grades, attendance, or what the teacher said or wants; or asking to ask/contact the teacher about it?
+A question about a subject itself (even one that contains the word exam, test or syllabus) is NOT.
+Return JSON only: {{"teacher_only": true}} or {{"teacher_only": false}}""", max_tokens=40)
+    return bool(res.get("teacher_only") is True) if isinstance(res, dict) else True
+
+
+def is_course_specific(question: str) -> bool:
+    """True when the question is about THIS course or its teacher (an exam date, a deadline, a grade, "what did the doctor mean"): the web cannot know it, so it
+    goes to the teacher instead of being searched. A general question ("what caused the first world war") returns False. No model and no keyword: False."""
+    if _COURSE.search(question or ""):
+        return True
+    res = llm.ask_json(f"""A student of a course asked: {question[:400]}
+Is this a question that only THIS course's teacher can answer (the course's exam, schedule, homework, grades, rules, what the teacher said or meant in class,
+or content that exists only in the teacher's own material)? A general knowledge or subject question that a textbook or the web explains is NOT.
+Return JSON only: {{"teacher_only": true}} or {{"teacher_only": false}}""", max_tokens=40)
+    return bool(isinstance(res, dict) and res.get("teacher_only") is True)
+
+
 def web_lookup(term: str, question: str, lang: str, keep_terms: bool = False) -> dict | None:
     """-> {"answer", "web_sources": [{n, title, url}], "cache_hits", "api_calls"}, or None when the web has nothing / cannot be searched."""
     from .answer import wants_detail

@@ -9,6 +9,17 @@
   </div>
 </div>
 
+<section class="panel panel-pad">
+  <form class="btn-row" method="post" action="{{ u('/rooms/' ~ room.room_id ~ '/rename') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf }}">
+    <input type="hidden" name="next" value="/rooms/{{ room.room_id }}/overview">
+    <label for="room_name">{{ t('room.rename') }}</label>
+    <input class="input" id="room_name" name="name" value="{{ room.name }}" maxlength="100" required>
+    <button class="btn btn-secondary btn-sm" type="submit">{{ t('room.rename_save') }}</button>
+    <small class="muted">{{ t('room.rename_hint') }}</small>
+  </form>
+</section>
+
 {% if created and join_code %}
 <section class="panel panel-pad created-banner" role="status">
   <div>

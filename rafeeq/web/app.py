@@ -57,12 +57,17 @@ def _routes() -> list:
         R(room + "/practice", student.practice_page, methods=["GET"]),
         R(room + "/practice/quiz", student.practice_quiz, methods=["POST"]),
         R(room + "/practice/submit", student.practice_submit, methods=["POST"]),
+        R(room + "/practice/{quiz_id}/{kind}.pdf", student.practice_pdf, methods=["GET"]),
+        R(room + "/practice/{quiz_id}/grade", student.practice_grade, methods=["POST"]),
         R(room + "/progress", student.progress_page, methods=["GET"]),
+        R(room + "/progress/quizzes/{quiz_id}", student.quiz_review_page, methods=["GET"]),
         # shared
         R(room + "/materials", student.materials_page, methods=["GET"]),
         R(room + "/materials/table", student.materials_table, methods=["GET"]),
         R(room + "/materials/upload", student.materials_upload, methods=["POST"]),
         R(room + "/materials/{file_id}/delete", student.materials_delete, methods=["POST"]),
+        R(room + "/materials/{file_id}/download", student.materials_download, methods=["GET"]),
+        R(room + "/rename", student.room_rename, methods=["POST"]),
         R(room + "/source", student.source_page, methods=["GET"]),
         # teacher
         R(room + "/overview", teacher.overview_page, methods=["GET"]),

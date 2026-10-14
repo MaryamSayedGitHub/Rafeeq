@@ -32,7 +32,7 @@ from .research import WORDS_PER_PAGE
 from .search import search_with_source
 
 log = logging.getLogger(__name__)
-ACTIONS = ("auto", "ask", "explain", "research", "quiz", "summary", "cards", "files", "file", "rewrite", "help", "hint", "solution", "check")
+ACTIONS = ("auto", "ask", "explain", "research", "quiz", "summary", "cards", "files", "file", "rewrite", "help", "hint", "solution", "check", "teacher")
 FILE_ACTIONS = ("quiz", "summary", "cards", "file")
 
 
@@ -77,6 +77,9 @@ def ask_payload(st: dict, level: int) -> dict:
 def _web_term(s: "TState", out: dict, photo: bool) -> bool:
     """M2 had nothing: answer from the web right here, short, with its sources, and NO study file (Level 2 is the deeper file).
     A question is searched as it is; a photo only when it holds a short term (anything longer becomes a study file)."""
+    if not photo and lookup.is_course_specific(s["text"]):          # only the teacher knows: no web answer, the Copilot files it in the teacher's inbox (grounded=False)
+        out.update(answer="", grounded=False, offer_level2=False, web_sources=[], material_source="none", needs_teacher=True)
+        return False
     term = lookup.term_of(s["text"], photo)
     term = re.sub(r"\s+", " ", _DETAIL.sub(" ", term)).strip() if term else term                  # "in detail" asks for a longer answer, it is not part of what is searched
     query = term or ("" if photo else re.sub(r"\s+", " ", _DETAIL.sub(" ", s["text"])).strip()[:150])
@@ -124,7 +127,9 @@ def n_ask(s: TState) -> TState:
     if level == 2 and out["study_file"]:
         out["study_file"]["pages"] = max(1, round(out["study_file"]["words"] / WORDS_PER_PAGE))
         out["study_file"]["stats"] = st.get("search_stats") or {}
-    if level == 1 and not out["grounded"] and p.get("lookup", True):
+    if level == 1 and lookup.mentions_course_matter(s["text"]):      # an exam date, a grade...: the course page may match the words, but only the teacher knows
+        out.update(answer="", citations=[], steps=[], grounded=False, offer_level2=False, web_sources=[], material_source="none", needs_teacher=True)
+    elif level == 1 and not out["grounded"] and p.get("lookup", True):
         _web_term(s, out, photo=False)
     return {"result": out, "error": None if (out["grounded"] or level == 1) else (out["error"] or "no study file")}
 
@@ -219,6 +224,15 @@ def n_hint(s: TState) -> TState:
     return {"result": {"n": n, "hint": data["hints"][n - 1], "next": "hint" if n < 3 else "solution"}}
 
 
+def n_teacher(s: TState) -> TState:
+    """"Ask my teacher": file the question in the teacher's inbox (M5). The teacher's reply comes back to the student's page, and is reused when anyone asks the same."""
+    from rafeeq.copilot import clients
+    ticket = clients.optional("escalate", s["room_id"], s["text"], s.get("user_id"))
+    if not ticket:
+        return {"result": {"escalated": False}, "error": "the teacher's inbox is not available"}
+    return {"result": {"escalated": True, "question_id": ticket["question_id"]}}
+
+
 def n_check(s: TState) -> TState:
     p = s.get("params", {})
     st = run_check(s["room_id"], s["text"], p.get("file_id", ""), s.get("user_id"), s.get("language"), p.get("confidence"))
@@ -231,14 +245,14 @@ def n_check(s: TState) -> TState:
 def build_graph():
     g = StateGraph(TState)
     for name, fn in [("route", n_route), ("ask", n_ask), ("explain", n_explain), ("explain_web", n_explain_web), ("file_tool", n_file_tool), ("rewrite", n_rewrite), ("help", n_help),
-                     ("hint", n_hint), ("check", n_check)]:
+                     ("hint", n_hint), ("check", n_check), ("teacher", n_teacher)]:
         g.add_node(name, fn)
     g.add_edge(START, "route")
     g.add_conditional_edges("route", lambda s: s["route"], {
         "ask": "ask", "explain": "explain", "research": "ask", "files": "file_tool", "file": "file_tool", "quiz": "file_tool", "summary": "file_tool", "cards": "file_tool",
-        "rewrite": "rewrite", "help": "help", "hint": "hint", "solution": "hint", "check": "check"})
+        "rewrite": "rewrite", "help": "help", "hint": "hint", "solution": "hint", "check": "check", "teacher": "teacher"})
     g.add_conditional_edges("explain", lambda s: "done" if s["result"]["grounded"] else "web", {"done": END, "web": "explain_web"})
-    for name in ("ask", "explain_web", "file_tool", "rewrite", "help", "hint", "check"):
+    for name in ("ask", "explain_web", "file_tool", "rewrite", "help", "hint", "check", "teacher"):
         g.add_edge(name, END)
     return g.compile()
 

@@ -9,8 +9,10 @@
 </div>
 
 <div class="study-layout">
-  <section class="panel chat-panel">
+  <section class="panel chat-panel" hx-headers='{"X-Chat-Id": "{{ chat_id }}"}'>
     <div class="chat-log" id="chat-log" aria-live="polite">
+      {% for turn in saved %}{{ turn.html | safe }}{% endfor %}
+      {% if not saved %}
       <div class="chat-empty" id="chat-empty">
         <span class="empty-icon">{{ icon('chat', 26) }}</span>
         <h3>{{ t('study.empty.title') }}</h3>
@@ -23,6 +25,7 @@
           {% endfor %}
         </div>
       </div>
+      {% endif %}
     </div>
 
     <div class="chat-indicator htmx-indicator" id="chat-indicator"><span class="spinner"></span>{{ t('study.thinking') }}</div>
@@ -49,13 +52,62 @@
     </form>
   </section>
 
-  <aside class="panel panel-pad study-side">
+  <aside class="stack">
+  <section class="panel panel-pad tq-chats">
+    <div class="tq-chats-head">
+      <h2 class="panel-title">{{ t('chats.title') }}</h2>
+      <a class="btn btn-primary btn-sm" href="{{ u('/rooms/' ~ room.room_id ~ '/study') }}">{{ icon('plus', 16) }}<span>{{ t('chats.new') }}</span></a>
+    </div>
+    {% if chat_list %}
+    <ul class="tq-chatlist">
+      {% for c in chat_list %}
+      <li class="{{ 'is-open' if c.id == chat_id else '' }}">
+        <a href="{{ u('/rooms/' ~ room.room_id ~ '/study', chat=c.id) }}"><span dir="auto">{{ c.title }}</span><small class="muted">{{ c.updated[:10] }} · {{ c.turns }}</small></a>
+        <form method="post" action="{{ u('/rooms/' ~ room.room_id ~ '/study/chats/' ~ c.id ~ '/delete') }}" onsubmit="return confirm({{ t('chats.delete_confirm') | tojson | forceescape }})">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}">
+          <button class="icon-btn" type="submit" title="{{ t('chats.delete') }}" aria-label="{{ t('chats.delete') }}">{{ icon('x_circle', 16) }}</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted small">{{ t('chats.empty') }}</p>{% endif %}
+  </section>
+
+  <section class="panel panel-pad tq-memory">
+    <h2 class="panel-title">{{ t('memory.title') }}</h2>
+    <p class="muted small">{{ t('memory.note') }}</p>
+    {% if notes %}
+    <ul class="tq-notes">
+      {% for n in notes %}
+      <li>
+        <span dir="auto">{{ n.note }}</span>
+        <form method="post" action="{{ u('/rooms/' ~ room.room_id ~ '/study/memory/' ~ n.id ~ '/delete') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="chat" value="{{ chat_id }}">
+          <button class="icon-btn" type="submit" title="{{ t('memory.delete') }}" aria-label="{{ t('memory.delete') }}">{{ icon('x_circle', 16) }}</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}<p class="muted small">{{ t('memory.empty') }}</p>{% endif %}
+    {% if recent %}<p class="muted small"><strong>{{ t('memory.recent') }}:</strong> <span dir="auto">{{ recent | join(' · ') }}</span></p>{% endif %}
+    {% if notes %}
+    <form method="post" action="{{ u('/rooms/' ~ room.room_id ~ '/study/memory/forget') }}" onsubmit="return confirm({{ t('memory.forget_confirm') | tojson | forceescape }})">
+      <input type="hidden" name="csrf_token" value="{{ csrf }}"><input type="hidden" name="chat" value="{{ chat_id }}">
+      <button class="btn btn-soft btn-sm" type="submit">{{ t('memory.forget') }}</button>
+    </form>
+    {% endif %}
+  </section>
+
+  <section class="panel panel-pad study-side">
     <h2 class="panel-title">{{ t('study.tip.title') }}</h2>
     <ul class="tip-list">
       <li>{{ icon('book', 18) }}<span>{{ t('study.tip.1') }}</span></li>
       <li>{{ icon('pen', 18) }}<span>{{ t('study.tip.2') }}</span></li>
       <li>{{ icon('quiz', 18) }}<span>{{ t('study.tip.3') }}</span></li>
+      <li>{{ icon('file', 18) }}<span>{{ t('tutor.tip.deeper') }}</span></li>
     </ul>
+    <a class="btn btn-soft btn-sm" href="{{ u('/rooms/' ~ room.room_id ~ '/study-files') }}">{{ icon('folder', 16) }}<span>{{ t('tab.study-files') }}</span></a>
+  </section>
   </aside>
 </div>
 {% endblock %}

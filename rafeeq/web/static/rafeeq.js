@@ -82,7 +82,7 @@
       try { boxes = JSON.parse(slot.getAttribute('data-boxes') || '[]'); } catch (e) { boxes = []; }
       boxes.forEach(function (b) {
         var d = document.createElement('span');
-        d.className = 'photo-box';
+        d.className = 'photo-box' + (b.status ? ' tq-box-' + b.status : '');
         // Box fractions are measured from the image's top-left corner, so use physical sides.
         d.style.left = (b.x * 100) + '%';
         d.style.top = (b.y * 100) + '%';

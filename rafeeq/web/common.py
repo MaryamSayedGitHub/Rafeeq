@@ -14,10 +14,12 @@ from starlette.templating import Jinja2Templates
 from rafeeq.web import api as api_mod
 from rafeeq.web.i18n import DEFAULT_LANG, LANGS, direction, t as translate
 from rafeeq.web.icons import icon
+from rafeeq.web.tutor_md import render_md
 
 HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 templates.env.globals["icon"] = icon
+templates.env.filters["md"] = render_md
 templates.env.trim_blocks = True
 templates.env.lstrip_blocks = True
 

@@ -8,9 +8,9 @@ from . import m2
 TOP_K = m2.TOP_K                 # the tutor never sends more than 3 passages to the model
 
 
-def search_with_source(room_id: str, query: str, top_k: int = TOP_K, topic_id: str | None = None) -> tuple[list[dict], str]:
+def search_with_source(room_id: str, query: str, top_k: int = TOP_K, topic_id: str | None = None, detail: bool = False) -> tuple[list[dict], str]:
     """-> (chunks, source) with source "m2" | "sample" | "none"."""
-    return m2.search(room_id, query, top_k, topic_id)
+    return m2.search(room_id, query, top_k, topic_id, detail)
 
 
 def search(room_id: str, query: str, top_k: int = TOP_K) -> list[dict]:

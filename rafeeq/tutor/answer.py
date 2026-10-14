@@ -113,11 +113,11 @@ def tutor_answer(room_id: str, question: str, language: str | None = None, chunk
     lang = language or answer_language(question)
     source = "given"
     if chunks is None:
-        chunks, source = search_with_source(room_id, question, DETAIL_TOP_K if wants_detail(question) else TOP_K, topic_id=topic_id)
+        chunks, source = search_with_source(room_id, question, DETAIL_TOP_K if wants_detail(question) else TOP_K, topic_id=topic_id, detail=wants_detail(question))
     not_found = {"answer": NOT_FOUND[lang], "citations": [], "grounded": False, "steps": [], "chunks": chunks, "source": source}
     if not chunks or (check_related and not related(question, chunks)):
         return not_found
-    res = llm.ask_json(_prompt(question, chunks, lang), max_tokens=2000 if wants_detail(question) else None)
+    res = llm.ask_json(_prompt(question, chunks, lang), max_tokens=2000) if wants_detail(question) else llm.ask_json(_prompt(question, chunks, lang))
     if res is None:                                                # no LLM: show the best passage itself, with its source
         best = chunks[0]
         return {"answer": best["text"], "citations": _citations([best]), "grounded": True, "steps": [], "chunks": [best], "source": source,

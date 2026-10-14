@@ -34,8 +34,9 @@ def post_event(event: dict) -> bool:
     otherwise POST to EVENTS_URL. Best effort."""
     try:
         from rafeeq.copilot import clients
-        if clients.is_connected("record_event"):
-            clients.optional("record_event", event)
+        hook = clients._CONNECTED.get("record_event")
+        if hook is not None and not getattr(hook, "is_m3", False):      # M4's own hook (in this app), never M3's which would call back here
+            hook(event)
             return True
     except Exception as e:                                         # noqa: BLE001
         log.warning("M4 record_event hook failed: %s", type(e).__name__)

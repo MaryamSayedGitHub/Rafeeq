@@ -111,11 +111,16 @@ def record_event(event: dict) -> None:
     events.post_event(event)
 
 
+record_event.is_m3 = True                                          # events.post_event must not hand the event back to this very function
+
+
 def connect_m3(force: bool = False) -> bool:
     """-> True when M3 is connected. Safe to call twice."""
     if os.environ.get("RAFEEQ_CONNECT_M3", "1") == "0" and not force:
         return False
     for name, fn in (("tutor_answer", tutor_answer), ("check_work", check_work), ("read_image", read_image), ("record_event", record_event)):
+        if name == "record_event" and clients.is_connected(name) and not getattr(clients._CONNECTED.get(name), "is_m3", False):
+            continue                                               # M4 already reads the events in this app (rafeeq/quiz/copilot_hooks.py): keep its hook
         clients.connect(name, fn)
     return True
 

@@ -53,10 +53,10 @@ def _fallback_on() -> bool:
     return os.getenv("TUTOR_SAMPLE_FALLBACK", "0") == "1"      # sample passages are for demos only: they must never answer a real question
 
 
-def search(room_id: str, query: str, top_k: int = TOP_K, topic_id: str | None = None) -> tuple[list[dict], str]:
+def search(room_id: str, query: str, top_k: int = TOP_K, topic_id: str | None = None, detail: bool = False) -> tuple[list[dict], str]:
     """-> (chunks, source) with source "m2" | "sample" | "none". At most top_k chunks, each with its text.
     topic_id: only passages of that topic (the contract has no such field, so more passages are asked for and filtered here)."""
-    top_k = max(1, min(top_k, MAX_TOP_K))
+    top_k = max(1, min(top_k, MAX_TOP_K if detail else TOP_K))          # the model gets 3 passages; a request "in detail" may have up to 8
     ask = 12 if topic_id else top_k
     url = os.getenv("M2_SEARCH_URL") or _base() + "/search"
 

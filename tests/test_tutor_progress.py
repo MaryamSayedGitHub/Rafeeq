@@ -45,8 +45,23 @@ def test_no_student_or_no_topic_records_nothing(m4):
 
 def test_a_question_reaches_m4_through_the_copilot_hook_in_the_same_app(monkeypatch):
     got = []
-    monkeypatch.setattr(clients, "is_connected", lambda name: name == "record_event")
-    monkeypatch.setattr(clients, "optional", lambda name, *a: got.append((name, a[0])))
+    monkeypatch.setitem(clients._CONNECTED, "record_event", lambda event: got.append(("record_event", event)))
     monkeypatch.setattr(events.requests, "post", lambda *a, **k: pytest.fail("no HTTP to ourselves"))
     assert events.send_question_event("u1", "r1", "t_cell", "what is a cell?")
     assert got[0][0] == "record_event" and got[0][1]["topic_id"] == "t_cell"
+
+
+def test_m3_does_not_replace_the_hook_m4_already_installed(monkeypatch):
+    from rafeeq.tutor import connect
+    m4_hook = lambda event: None            # noqa: E731
+    monkeypatch.setitem(clients._CONNECTED, "record_event", m4_hook)
+    connect.connect_m3(force=True)
+    assert clients._CONNECTED["record_event"] is m4_hook
+    connect.disconnect_m3()
+
+
+def test_an_event_never_loops_back_through_m3s_own_hook(monkeypatch):
+    from rafeeq.tutor import connect
+    monkeypatch.setitem(clients._CONNECTED, "record_event", connect.record_event)           # only M3's hook is there (no M4 in this app)
+    monkeypatch.setattr(events.requests, "post", lambda *a, **k: type("R", (), {"raise_for_status": lambda s: None})())
+    assert events.send_question_event("u1", "r1", "t_cell", "what is a cell?")                 # goes by HTTP, no RecursionError

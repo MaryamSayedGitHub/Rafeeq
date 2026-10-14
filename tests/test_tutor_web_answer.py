@@ -60,7 +60,7 @@ def test_in_detail_gives_more_passages_a_longer_prompt_and_room_to_write(world, 
     seen = {}
     chunks = [{"file_name": "bio.pdf", "page": i, "text": f"Mitochondria fact number {i}. " * 20, "topic_id": "t"} for i in range(1, 9)]
 
-    def search(room, q, top_k=3, topic_id=None):
+    def search(room, q, top_k=3, topic_id=None, detail=False):
         seen["top_k"] = top_k
         return chunks[:top_k], "m2"
     monkeypatch.setattr(m2, "search", search)

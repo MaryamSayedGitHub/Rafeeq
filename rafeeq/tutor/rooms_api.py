@@ -93,7 +93,7 @@ class AskResponse(_Strict):
 
 
 class TutorActRequest(_Strict):
-    action: Literal["auto", "ask", "explain", "research", "quiz", "summary", "cards", "files", "file", "rewrite", "help", "hint", "solution", "check"] = "auto"
+    action: Literal["auto", "ask", "explain", "research", "quiz", "summary", "cards", "files", "file", "rewrite", "help", "hint", "solution", "check", "teacher"] = "auto"
     text: str = Field("", max_length=4000, description="The question, the problem, the answer to rewrite, or the steps to check (by action).")
     language: Literal["ar", "en"] | None = None
     pages: int | None = Field(None, ge=1, le=research.MAX_PAGES)

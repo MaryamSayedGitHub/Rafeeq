@@ -66,6 +66,12 @@ def classify_with_source(text: str, has_file: bool, history: list, mode: str = "
     """Returns (route, source); source is mode, keyword, llm or rules."""
     if mode in ("ask", "check_work"):
         return mode, "mode"
+    try:
+        from rafeeq.tutor import lookup
+        if not has_file and lookup.mentions_course_matter(text):    # "when is the midterm": not a study plan, only the teacher knows; the ask route files it in the teacher's inbox
+            return "ask", "course"
+    except Exception:
+        log.exception("course-matter check failed")
     route = strong_rule(text, has_file)
     if route:
         return route, "keyword"

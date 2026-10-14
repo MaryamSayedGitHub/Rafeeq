@@ -269,6 +269,17 @@ class PlatformStore:
             self._save()
             return {"room": self._room_payload(room), "join_code": code}
 
+    def rename_room(self, user: dict, room_id: str, name: str) -> dict:
+        """Only the room's teacher. Students see the new name on their next page load (rooms are read, never copied)."""
+        room = self._owned_room(user, room_id)
+        name = (name or "").strip()
+        if not name:
+            raise Invalid("Room name is required")
+        with self._lock:
+            room["name"] = name[:100]
+            self._save()
+            return self._room_payload(room)
+
     def join_room(self, user: dict, code: str) -> dict:
         if user["role"] != "student":
             raise Forbidden("Only students join rooms with a code")
@@ -354,6 +365,17 @@ class PlatformStore:
             if f["file_id"] == file_id:
                 return Path(f["path"])
         raise NotFound("File not found")
+
+    def read_file(self, user: dict, room_id: str, file_id: str) -> tuple[str, bytes]:
+        """(name, bytes) of one material, for the room's teacher or any member (a student downloads the teacher's material)."""
+        self.room_for(user, room_id)
+        record = next((f for f in self.db["files"].get(room_id, []) if f["file_id"] == file_id), None)
+        if record is None:
+            raise NotFound("File not found")
+        try:
+            return record["name"], Path(record["path"]).read_bytes()
+        except OSError:
+            raise NotFound("The file is no longer stored") from None
 
     def list_files(self, user: dict, room_id: str) -> dict:
         self.room_for(user, room_id)

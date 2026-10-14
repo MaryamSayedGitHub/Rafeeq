@@ -4,10 +4,13 @@ Materials and the source viewer are shared with teachers and live here too.
 """
 from __future__ import annotations
 
+import json
 import secrets
 from urllib.parse import quote
 
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
+from starlette.responses import Response
 
 from rafeeq.web import api as A
 from rafeeq.web.common import api, api_message, check_csrf, flash, notice, redirect, render, tr
@@ -147,6 +150,35 @@ async def materials_upload(request: Request):
     return redirect(request, f"/rooms/{room['room_id']}/materials")
 
 
+async def materials_download(request: Request):
+    """The teacher's material, saved by the teacher or any student of the room."""
+    user, room, _ = await load_room(request, request.path_params["room_id"])
+    res = await api(request).get(f"/rooms/{room['room_id']}/files/{quote(request.path_params['file_id'], safe='')}/download",
+                                 token=user["token"], timeout=60)
+    if not res.ok:
+        raise HTTPException(status_code=404, detail="file")
+    return Response(res.content, media_type=res.headers.get("content-type", "application/octet-stream"),
+                    headers={"Content-Disposition": res.headers.get("content-disposition", "attachment"), "X-Content-Type-Options": "nosniff"})
+
+
+async def room_rename(request: Request):
+    """The teacher renames the room; the students' pages read the name from the room, so they show the new one at once."""
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    form = await check_csrf(request)
+    name = strip_isolates(str(form.get("name", ""))).strip()
+    back = str(form.get("next", "")) if str(form.get("next", "")).startswith(f"/rooms/{room['room_id']}/") else f"/rooms/{room['room_id']}/overview"
+    if not name:
+        flash(request, "warning", tr(request, "room.rename_empty"))
+        return redirect(request, back)
+    res = await api(request).put(f"/rooms/{room['room_id']}", token=user["token"], json={"name": name[:100]})
+    ensure_session(request, res)
+    if res.ok:
+        flash(request, "success", tr(request, "room.renamed"))
+    else:
+        flash(request, "error", api_message(request, res))
+    return redirect(request, back)
+
+
 async def materials_delete(request: Request):
     user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
     await check_csrf(request)
@@ -214,6 +246,11 @@ async def practice_submit(request: Request):
     questions = [str(form.get(f"q_{i}", "")) for i in range(n)]
     if any(not a for a in answers):
         return notice(request, tr(request, "practice.answer_all"), "warning")
+    return await _submit_quiz(request, user, room, quiz_id, answers, questions, str(form.get("topic_id", "")))
+
+
+async def _submit_quiz(request: Request, user: dict, room: dict, quiz_id: str, answers: list[str], questions: list[str], topic_id: str):
+    n = len(answers)
     res, (_, names) = await gather(
         api(request).post(f"/quiz/{quiz_id}/submit", token=user["token"], json={"answers": answers}),
         topic_names(request, user, room["room_id"]),
@@ -223,7 +260,62 @@ async def practice_submit(request: Request):
         return notice(request, api_message(request, res), "warning")
     rows = [{"q": q, "a": a, "e": e} for q, a, e in zip(questions, answers, res.data.get("explanations", []) + [""] * n)]
     return render(request, "partials/quiz_result.html", room=room, result=res.data, rows=rows,
-                  topic_names=names, topic_id=str(form.get("topic_id", "")))
+                  topic_names=names, topic_id=topic_id, quiz_id=quiz_id)
+
+
+async def practice_pdf(request: Request):
+    """The quiz as a printable PDF (questions + bubble answer sheet), or, after submitting, the score report PDF."""
+    user, room, _ = await load_room(request, request.path_params["room_id"], "student")
+    kind = request.path_params["kind"]
+    if kind not in ("sheet", "report"):
+        raise HTTPException(status_code=404)
+    path = "print.pdf" if kind == "sheet" else "report.pdf"
+    res = await api(request).get(f"/quiz/{quote(request.path_params['quiz_id'], safe='')}/{path}", token=user["token"],
+                                 params={"room_id": room["room_id"]}, timeout=60)
+    ensure_session(request, res)
+    if not res.ok:
+        flash(request, "warning", api_message(request, res))
+        return redirect(request, f"/rooms/{room['room_id']}/practice")
+    return Response(res.content, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="quiz-{kind}.pdf"', "X-Content-Type-Options": "nosniff"})
+
+
+async def practice_grade(request: Request):
+    """The student solved the printed sheet and uploads its photo: M4 reads the marks. Clear marks are submitted and scored;
+    unclear ones come back as the quiz form, filled in, so the student fixes them first (nothing is saved until the submit)."""
+    user, room, _ = await load_room(request, request.path_params["room_id"], "student")
+    if too_large(request):
+        return notice(request, tr(request, "materials.too_big"), "warning")
+    form = await check_csrf(request)
+    quiz_id = request.path_params["quiz_id"]
+    photo = form.get("photo")
+    if photo is None or not getattr(photo, "filename", ""):
+        return notice(request, tr(request, "snap.choose_file"), "warning")
+    if (photo.content_type or "").lower() not in IMAGE_TYPES:
+        return notice(request, tr(request, "snap.not_image"), "warning")
+    data = await photo.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        return notice(request, tr(request, "materials.too_big"), "warning")
+    try:
+        questions = json.loads(str(form.get("quiz_json", "[]")))
+        quiz = [{"text": str(q["text"]), "choices": [str(c) for c in q["choices"]]} for q in questions][:20]
+    except (ValueError, KeyError, TypeError):
+        return notice(request, tr(request, "err.generic"), "warning")
+    topic_id = str(form.get("topic_id", ""))
+    res = await api(request).post(f"/quizzes/{quote(quiz_id, safe='')}/grade-sheet", token=user["token"],
+                                  files={"photo": (photo.filename, data, photo.content_type)}, timeout=90)
+    ensure_session(request, res)
+    if not res.ok:
+        return notice(request, api_message(request, res), "warning")
+    detected = res.data.get("answers", [])
+    if len(detected) != len(quiz):
+        return notice(request, tr(request, "err.generic"), "warning")
+    picked = [q["choices"][a["choice"]] if isinstance(a.get("choice"), int) and 0 <= a["choice"] < len(q["choices"]) else "" for q, a in zip(quiz, detected)]
+    if res.data.get("needs_review") or not all(picked):
+        flagged = {i for i, a in enumerate(detected) if a["item_id"] in res.data.get("needs_review", []) or not picked[i]}
+        return render(request, "partials/quiz_form.html", room=room, quiz={"quiz_id": quiz_id, "topic_id": topic_id, "questions": quiz},
+                      picked=picked, flagged=flagged, review_note=True)
+    return await _submit_quiz(request, user, room, quiz_id, picked, [q["text"] for q in quiz], topic_id)
 
 
 # ---------------------------------------------------------------- progress
@@ -231,11 +323,28 @@ async def practice_submit(request: Request):
 async def progress_page(request: Request):
     user, room, rooms = await load_room(request, request.path_params["room_id"], "student")
     params = {"room_id": room["room_id"]}
-    summary_res, next_res, (topics_res, names) = await gather(
-        api(request).get("/profile/summary", token=user["token"], params=params),
-        api(request).get("/next-step", token=user["token"], params=params),
+    scores_res, history_res, (topics_res, names) = await gather(
+        api(request).get(f"/rooms/{room['room_id']}/topic-scores", token=user["token"]),
+        api(request).get(f"/rooms/{room['room_id']}/quiz-history", token=user["token"]),
         topic_names(request, user, room["room_id"]),
     )
+    ensure_session(request, scores_res)
+    scores = scores_res.data.get("topics", []) if scores_res.ok else []
     return render(request, "room/progress.html", room=room, rooms=rooms, tab="progress",
-                  summary_res=summary_res, next_res=next_res, topic_names=names)
+                  scores_res=scores_res, scores=scores, weak=[s for s in scores if s["weak"]],
+                  history_res=history_res, topic_names=names)
+
+
+async def quiz_review_page(request: Request):
+    """One past quiz: every question with my answer, the right one, and why (the wrong ones first)."""
+    user, room, rooms = await load_room(request, request.path_params["room_id"], "student")
+    res, (_, names) = await gather(
+        api(request).get(f"/quiz/{quote(request.path_params['quiz_id'], safe='')}/review", token=user["token"]),
+        topic_names(request, user, room["room_id"]),
+    )
+    ensure_session(request, res)
+    if res.kind == A.NOT_FOUND or res.kind == A.FORBIDDEN:
+        raise HTTPException(status_code=404, detail="quiz")
+    return render(request, "room/quiz_review.html", room=room, rooms=rooms, tab="progress", res=res, review=res.data if res.ok else None,
+                  topic_names=names)
 

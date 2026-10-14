@@ -23,7 +23,7 @@ from rafeeq.web.i18n import strip_isolates
 from rafeeq.web.i18n import strip_isolates as _strip
 from rafeeq.web.views_rooms import ensure_session, load_room
 
-ACTIONS = {"research", "quiz", "summary", "cards", "rewrite", "hint", "solution"}
+ACTIONS = {"research", "quiz", "summary", "cards", "rewrite", "hint", "solution", "teacher"}
 
 
 def _int(value, default=None):
@@ -72,6 +72,8 @@ async def agent_action(request: Request):
     if not res.ok:
         return notice(request, api_message(request, res), "warning")
     out = res.data
+    if not out["ok"] and action == "teacher":
+        return notice(request, tr(request, "tutor.teacher_fail"), "warning")
     if not out["ok"] and action in ("hint", "solution"):           # an unknown key: say so instead of an empty hint
         return notice(request, tr(request, "tutor.tool_fail"), "warning")
     ctx = dict(room=room, out=out, r=out["result"], turn_id=secrets.token_hex(4), question=text, key=body.get("key", ""),
@@ -86,6 +88,8 @@ async def agent_action(request: Request):
         return render(request, "partials/tutor_cards.html", **ctx)
     if action == "rewrite":
         return render(request, "partials/tutor_rewrite.html", **ctx)
+    if action == "teacher":
+        return render(request, "partials/tutor_teacher.html", **ctx)
     return render(request, "partials/tutor_hint.html" if action == "hint" else "partials/tutor_solution.html", **ctx)
 
 

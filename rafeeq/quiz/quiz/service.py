@@ -206,6 +206,69 @@ def submit_quiz(
     return SubmitResponse(score=score, items=results)
 
 
+def quiz_history(session: Session, *, user_id: str, room_id: str) -> list[dict]:
+    """The student's SUBMITTED quizzes in a room, newest first: when, score, and which topics."""
+    rows = session.scalars(
+        select(AnswerRow).where(AnswerRow.user_id == user_id, AnswerRow.room_id == room_id).order_by(AnswerRow.id)
+    ).all()
+    by_quiz: dict[str, list[AnswerRow]] = {}
+    for r in rows:
+        by_quiz.setdefault(r.quiz_id, []).append(r)
+    history = []
+    for quiz_id, answers in by_quiz.items():
+        correct = sum(a.correct for a in answers)
+        history.append({
+            "quiz_id": quiz_id, "submitted_at": max(a.created_at for a in answers).isoformat(),
+            "total": len(answers), "correct": correct, "score": correct / len(answers),
+            "topic_ids": sorted({a.topic_id for a in answers}),
+        })
+    history.sort(key=lambda h: h["submitted_at"], reverse=True)
+    return history
+
+
+WEAK_AVERAGE = 0.6  # a topic whose average quiz score is below this needs review
+
+
+def topic_scores(session: Session, *, user_id: str, room_id: str) -> list[dict]:
+    """Per topic, the average of this student's quiz scores in it (each quiz counts once: its correct/total for that topic).
+    Quizzes only: questions asked in the chat do not count. Lowest average first."""
+    rows = session.scalars(
+        select(AnswerRow).where(AnswerRow.user_id == user_id, AnswerRow.room_id == room_id)
+    ).all()
+    per_quiz: dict[tuple[str, str], list[bool]] = {}
+    for r in rows:
+        per_quiz.setdefault((r.topic_id, r.quiz_id), []).append(r.correct)
+    by_topic: dict[str, list[float]] = {}
+    for (topic_id, _), flags in per_quiz.items():
+        by_topic.setdefault(topic_id, []).append(sum(flags) / len(flags))
+    scores = [{"topic_id": t, "average": sum(v) / len(v), "quizzes": len(v), "weak": sum(v) / len(v) < WEAK_AVERAGE}
+              for t, v in by_topic.items()]
+    return sorted(scores, key=lambda s: s["average"])
+
+
+def quiz_review(session: Session, *, user_id: str, quiz_id: str) -> dict:
+    """One submitted quiz, question by question: what the student chose, the right answer and why. Only for its owner.
+    Raises QuizNotFound when the quiz does not exist or was never submitted."""
+    items = get_quiz_items(session, quiz_id=quiz_id, user_id=user_id)
+    answers = {a.item_id: a for a in session.scalars(
+        select(AnswerRow).where(AnswerRow.quiz_id == quiz_id, AnswerRow.user_id == user_id)).all()}
+    if not answers:
+        raise QuizNotFound(quiz_id)
+    questions = []
+    for it in items:
+        a = answers.get(it.item_id)
+        chosen = a.chosen if a else -1
+        questions.append({
+            "item_id": it.item_id, "topic_id": it.topic_id, "text": it.stem, "options": list(it.options),
+            "chosen": chosen if 0 <= chosen < len(it.options) else None, "right_choice": it.right_choice,
+            "correct": bool(a and a.correct), "explanation": it.explanation, "file_name": it.file_name, "page": it.page,
+        })
+    correct = sum(q["correct"] for q in questions)
+    return {"quiz_id": quiz_id, "submitted_at": max(a.created_at for a in answers.values()).isoformat(),
+            "total": len(questions), "correct": correct, "score": correct / len(questions) if questions else 0.0,
+            "questions": questions}
+
+
 def _student_ref(room_id: str, user_id: str) -> str:
     """Stable anonymous reference: the same student gets the same ref in a room."""
     return "s-" + hashlib.sha256(f"{room_id}:{user_id}".encode()).hexdigest()[:8]

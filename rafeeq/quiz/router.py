@@ -191,6 +191,42 @@ def quiz_report_pdf(
                         headers={"X-Quiz-Id": quiz_id})
 
 
+# ---------- the student's quiz history (M4 extras) ----------
+@router.get("/rooms/{room_id}/quiz-history")
+def my_quiz_history(
+    room_id: str,
+    session: Session = Depends(get_session),
+    user_id: str = Depends(current_user_id),
+) -> dict:
+    """Every quiz this student submitted in the room, newest first."""
+    return {"quizzes": quiz_service.quiz_history(session, user_id=user_id, room_id=room_id)}
+
+
+@router.get("/rooms/{room_id}/topic-scores")
+def my_topic_scores(
+    room_id: str,
+    session: Session = Depends(get_session),
+    user_id: str = Depends(current_user_id),
+) -> dict:
+    """This student's average quiz score per topic (quizzes only), lowest first."""
+    return {"topics": quiz_service.topic_scores(session, user_id=user_id, room_id=room_id)}
+
+
+@router.get("/quiz/{quiz_id}/review")
+def quiz_review(
+    quiz_id: str,
+    session: Session = Depends(get_session),
+    user_id: str = Depends(current_user_id),
+) -> dict:
+    """One submitted quiz with the student's answers, the right ones and the explanations."""
+    try:
+        return quiz_service.quiz_review(session, user_id=user_id, quiz_id=quiz_id)
+    except quiz_service.QuizNotFound:
+        raise HTTPException(status_code=404, detail="quiz not found or not submitted yet")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="this quiz belongs to another student")
+
+
 # ---------- POST /quiz/{quiz_id}/submit ----------
 @router.post("/quiz/{quiz_id}/submit")
 def submit_quiz(

@@ -28,6 +28,9 @@
   </ol>
 
   <div class="btn-row">
+    {% if quiz_id %}
+    <a class="btn btn-secondary" href="{{ u('/rooms/' ~ room.room_id ~ '/practice/' ~ quiz_id ~ '/report.pdf') }}">{{ icon('download', 16) }}<span>{{ t('practice.report_pdf') }}</span></a>
+    {% endif %}
     <a class="btn btn-secondary" href="{{ u('/rooms/' ~ room.room_id ~ '/practice', topic=topic_id) }}">{{ icon('refresh', 16) }}<span>{{ t('practice.again') }}</span></a>
     {% if topic_id %}
     <a class="btn btn-soft" href="{{ u('/rooms/' ~ room.room_id ~ '/study', q=t('practice.ask_prefill', topic=topic_names.get(topic_id, ''))) }}">{{ icon('chat', 16) }}<span>{{ t('practice.ask_about') }}</span></a>

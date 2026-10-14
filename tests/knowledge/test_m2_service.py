@@ -255,3 +255,59 @@ def test_llm_from_env_uses_the_gemini_openai_endpoint():
         for k, v in saved.items():
             if v is not None:
                 os.environ[k] = v
+
+
+def test_a_deleted_file_disappears_from_search_and_stays_gone_after_a_restart(tmp_path):
+    env = Env(tmp_path)
+    env.upload(file_id="f_a1", name="one.pdf")
+    env.upload(file_id="f_b2", name="two.pdf")
+    assert env.service.remove_file("r_1", "f_a1").result(timeout=30) == 3
+    names = {c["file_name"] for c in env.service.search("r_1", "neural networks gradient", 10)["chunks"]}
+    assert names == {"two.pdf"}
+    again = env.fresh_service()
+    assert {c["file_name"] for c in again.search("r_1", "self-attention", 10)["chunks"]} == {"two.pdf"}
+
+
+def test_removing_a_file_that_was_never_indexed_is_harmless(tmp_path):
+    env = Env(tmp_path)
+    assert env.service.remove_file("r_1", "f_none").result(timeout=30) == 0  # no store yet
+    env.upload()
+    assert env.service.remove_file("r_1", "f_none").result(timeout=30) == 0
+    assert len(env.service.search("r_1", "self-attention", 5)["chunks"]) > 0
+
+
+def test_room_chunks_give_m4_the_rooms_material_with_topic_names(tmp_path):
+    env = Env(tmp_path)
+    assert env.service.room_chunks("r_1") == []
+    env.upload()
+    chunks = env.service.room_chunks("r_1")
+    assert len(chunks) == 3 and {c["file_name"] for c in chunks} == {"course.pdf"}
+    assert all(c["topic_name"] and c["topic_id"] for c in chunks)
+    assert env.service.room_chunks("r_2") == []
+
+
+def test_overview_explains_the_newest_file_and_cites_its_pages(tmp_path):
+    env = Env(tmp_path)
+    assert env.service.overview("r_1", "explain the lesson", propose=lambda s, u: {"answer": "x"}) is None  # nothing indexed
+    env.upload(file_id="f_a1", name="old.pdf")
+    env.upload(file_id="f_b2", name="new.pdf")
+    seen = []
+
+    def propose(system, user):
+        seen.append(user)
+        return {"answer": "The lesson is about attention, CNNs and gradient descent (p. 1).", "pages": [1, 99]}
+
+    out = env.service.overview("r_1", "اشرح الدرس الأخير", propose=propose)
+    check("TutorAnswer", out)
+    assert out["grounded"] is True and out["citations"] == [{"file_name": "new.pdf", "page": 1}]
+    assert "File: new.pdf" in seen[0] and "old.pdf" not in seen[0]
+    assert env.service.overview("r_1", "q", propose=lambda s, u: {"nope": 1}) is None
+
+
+def test_topic_for_citations_finds_the_topic_of_the_cited_pages(tmp_path):
+    env = Env(tmp_path)
+    env.upload()
+    topic = env.service.topic_for_citations("r_1", [{"file_name": "course.pdf", "page": 1}])
+    assert topic == env.service.room_chunks("r_1")[0]["topic_id"]
+    assert env.service.topic_for_citations("r_1", []) is None
+    assert env.service.topic_for_citations("r_1", [{"file_name": "other.pdf", "page": 1}]) is None

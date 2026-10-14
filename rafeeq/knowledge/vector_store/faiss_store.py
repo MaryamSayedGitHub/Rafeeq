@@ -154,7 +154,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
 # --------------------------------------------------------------------- store
 
 class FAISSVectorStore:
-    """Append-only exact vector store with room / document filtering."""
+    """Exact vector store with room / document filtering. Chunks are added in bulk and removed
+    one whole document at a time (when a teacher deletes a file)."""
 
     def __init__(self, dimension: int) -> None:
         if not _is_int(dimension) or dimension <= 0:
@@ -221,6 +222,31 @@ class FAISSVectorStore:
         self._records.extend(records)
         self._keys |= new_keys
         return len(records)
+
+    # ----- remove
+
+    def remove_document(self, room_id: str, document_id: str) -> int:
+        """Remove every chunk of one document in one room; return how many were removed.
+
+        IndexFlatIP keeps vectors in insertion order, so the store is rebuilt from the kept
+        vectors. That is exact and fast enough for course-sized stores. Unknown document: 0.
+        """
+        _require_non_empty_str(room_id, "room_id")
+        _require_non_empty_str(document_id, "document_id")
+        keep = [i for i, r in enumerate(self._records)
+                if not (r["room_id"] == room_id and r["document_id"] == document_id)]
+        removed = len(self._records) - len(keep)
+        if removed == 0:
+            return 0
+        index = faiss.IndexFlatIP(self._dimension)
+        if keep:
+            vectors = np.vstack([self._index.reconstruct(i) for i in keep]).astype("float32")
+            index.add(vectors)
+        records = [self._records[i] for i in keep]
+        self._index, self._records = index, records
+        self._keys = {_identity(r) for r in records}
+        self._row_cache = None
+        return removed
 
     # ----- search
 

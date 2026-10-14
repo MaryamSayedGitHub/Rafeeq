@@ -45,6 +45,27 @@ def _with_retries(fn: Callable[[str], str], tries: int = 4) -> Callable[[str], s
 def make_llm(provider: str, model: str | None = None) -> Callable[[str], str]:
     model = model or DEFAULT_MODELS.get(provider, "")
 
+    if provider in ("compatible", "openai_compatible"):
+        # The app's main model: any OpenAI-compatible endpoint (Groq, Gemini's compatible mode, ...).
+        key = os.getenv("LLM_API_KEY", "").strip()
+        if not key or key.startswith("put-your"):
+            raise RuntimeError("LLM_API_KEY is missing from .env")
+        base = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        model = model if model and model != DEFAULT_MODELS.get(provider) else os.getenv("LLM_MODEL", "gpt-4o-mini")
+
+        def call_compatible(prompt: str) -> str:
+            import httpx
+
+            r = httpx.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {key}"},
+                           json={"model": model, "messages": [{"role": "user", "content": prompt}],
+                                 "response_format": {"type": "json_object"}, "temperature": 0.3},
+                           timeout=90)
+            if r.status_code >= 400:  # the status code in the message drives _with_retries
+                raise RuntimeError(f"{r.status_code} {r.text[:200]}")
+            return r.json()["choices"][0]["message"]["content"] or ""
+
+        return _with_retries(call_compatible)
+
     if provider == "openai":
         if not os.getenv("OPENAI_API_KEY"):
             raise RuntimeError("OPENAI_API_KEY is missing from .env")

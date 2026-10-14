@@ -13,9 +13,11 @@ Copilot then says the capability is not available instead of showing sample cont
 Expected signatures (all return the contract's JSON shape as a dict):
   tutor_answer(room_id, question)            -> TutorAnswer          (M3)
   check_work(room_id, file_id, text)         -> HandwritingCheck     (M3)
-  make_quiz(room_id, topic_id | None)        -> Quiz                 (M4)
-  next_step(room_id, user_id | None)         -> NextStep             (M4)
+  make_quiz(room_id, topic_id | None)        -> Quiz                 (M4, optional: the chat now uses next_step)
+  next_step(room_id, user_id | None)         -> NextStep | None      (M4, rafeeq/quiz/copilot_hooks.py)
   read_image(image_bytes)                    -> {type, language, text, confidence}  (M3 OCR)
+  overview(room_id, question)                -> TutorAnswer | None   (M2: "explain the last lesson")
+  topic_of(room_id, citations)               -> topic_id | None      (M2: which topic a cited answer is about)
   find_verified(room_id, question)           -> {answer, ...} | None (teacher-approved answers, not in contract yet)
   escalate(room_id, question, user_id)       -> {question_id}        (teacher inbox, not in contract yet)
   record_event(event_dict)                   -> None                 (M4 /events, QuestionEvent)

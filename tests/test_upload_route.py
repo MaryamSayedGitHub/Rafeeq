@@ -17,3 +17,7 @@ def test_upload_file_returns_the_agreed_fields():
     data = r.json()
     assert set(data) == {"file_id", "status"}
     assert data["status"] in ("uploaded", "indexing", "ready", "failed")
+
+def test_deleting_a_file_needs_a_login():
+    r = client.delete("/rooms/r_bio101/files/f_1")
+    assert r.status_code == 401

@@ -4,6 +4,7 @@ from markupsafe import Markup
 _PATHS = {
     "film": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
+    "trash": '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/>',
     "arrow": '<path d="M19 12H5M12 19l-7-7 7-7"/>',
     "chevron": '<path d="m15 18-6-6 6-6"/>',
     "search": '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',

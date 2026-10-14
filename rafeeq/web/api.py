@@ -109,3 +109,6 @@ class Api:
 
     async def put(self, path: str, **kw: Any) -> ApiResult:
         return await self.request("PUT", path, **kw)
+
+    async def delete(self, path: str, **kw: Any) -> ApiResult:
+        return await self.request("DELETE", path, **kw)

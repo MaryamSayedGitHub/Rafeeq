@@ -25,6 +25,7 @@
             <th scope="col">{{ t('students.col.questions') }}</th>
             <th scope="col">{{ t('students.col.mastery') }}</th>
             <th scope="col">{{ t('students.col.status') }}</th>
+            <th scope="col"><span class="sr-only">{{ t('parent.open') }}</span></th>
           </tr></thead>
           <tbody>
             {% for s in students_res.data.students %}
@@ -33,6 +34,7 @@
               <td dir="ltr" class="num">{{ s.questions_this_week }}</td>
               <td>{% if s.mastery is not none %}{{ meter(s.mastery, s.status) }}{% else %}<span class="muted">{{ t('students.no_data') }}</span>{% endif %}</td>
               <td>{{ student_status(t, s.status) }}</td>
+              <td><a class="btn btn-light btn-sm" href="{{ u('/rooms/' ~ room.room_id ~ '/students/' ~ s.user_id ~ '/report') }}">{{ icon('file', 14) }}<span>{{ t('parent.open') }}</span></a></td>
             </tr>
             {% endfor %}
           </tbody>

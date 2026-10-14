@@ -44,7 +44,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.delenv("RAFEEQ_API_BASE", raising=False)
     service.set_store(service.PlatformStore(tmp_path / "platform", seed_demo=True))
     clear_history()
-    names = ("read_image", "tutor_answer", "check_work", "make_quiz", "next_step", "escalate", "find_verified", "record_event")
+    names = ("read_image", "tutor_answer", "check_work", "make_quiz", "next_step", "escalate", "find_verified", "record_event", "overview", "topic_of")
     for n in names:
         clients.disconnect(n)
     yield
@@ -286,6 +286,22 @@ def test_upload_shows_file_as_uploaded_not_ready(env):
     r = t.post(f"/app/rooms/{room_id}/materials/upload", data={"csrf_token": csrf_of(page.text)},
                files={"file": ("notes.pdf", b"%PDF-1.4 test", "application/pdf")})
     assert "notes.pdf" in r.text and "تم الرفع" in r.text and "جاهز</span>" not in r.text
+
+
+def test_teacher_can_delete_a_file_and_students_see_no_delete_button(env):
+    app, _ = env
+    t, room_id, code = teacher_with_room(app)
+    page = t.get(f"/app/rooms/{room_id}/materials")
+    t.post(f"/app/rooms/{room_id}/materials/upload", data={"csrf_token": csrf_of(page.text)},
+           files={"file": ("slides.pptx", b"pptx", "application/octet-stream")})
+    page = t.get(f"/app/rooms/{room_id}/materials")
+    assert "/materials/" in page.text and "/delete" in page.text
+    action = page.text.split('action="')[1:]
+    delete_url = next(a.split('"')[0] for a in action if a.split('"')[0].endswith("/delete"))
+    s, _ = student_in_room(app, code)
+    assert "/delete" not in s.get(f"/app/rooms/{room_id}/materials").text
+    r = t.post(delete_url, data={"csrf_token": csrf_of(page.text)})
+    assert "slides.pptx" not in r.text and "تم حذف الملف" in r.text
 
 
 def test_students_page_lists_joined_student_without_invented_mastery(env):
@@ -569,3 +585,40 @@ def test_a_saved_youtube_moment_plays_only_its_clip():
     url = yt_embed("https://www.youtube.com/watch?v=abc12345678&t=75s", 75.0, 130.0)
     assert url == "https://www.youtube-nocookie.com/embed/abc12345678?rel=0&start=75&end=130"
     assert yt_embed("https://example.com/watch?v=abc12345678") == "" and yt_embed("") == ""
+
+
+def test_teacher_opens_a_parent_report_and_the_share_link_works_without_login(env):
+    app, double = env
+    t, room_id, code = teacher_with_room(app)
+    student_in_room(app, code)
+    page = t.get(f"/app/rooms/{room_id}/students")
+    link = re.search(r'href="(/app/rooms/' + room_id + r'/students/[^"]+/report)"', page.text).group(1)
+    report = t.get(link)
+    assert report.status_code == 200 and "تقرير وليّ الأمر" in report.text and "Omar" in report.text
+    assert "لم يسجّل Omar نشاطًا" in report.text            # honest: no activity yet, nothing invented
+    share = re.search(r'data-copy="(http[^"]+/app/p/[^"]+)"', report.text).group(1)
+    public = TestClient(app).get("/" + share.split("://", 1)[1].split("/", 1)[1])
+    assert public.status_code == 200 and "Omar" in public.text and "logout" not in public.text
+    bad = TestClient(app).get("/app/p/not-a-real-token")
+    assert bad.status_code == 404 and "انتهت صلاحية الرابط" in bad.text
+    assert not double.violations
+
+
+def test_teacher_answers_an_escalated_question_and_the_student_sees_the_reply(env):
+    from rafeeq.teacher import inbox
+
+    app, double = env
+    t, room_id, code = teacher_with_room(app)
+    s, _ = student_in_room(app, code)
+    omar = next(uid for uid, u in service.get_store().db["users"].items() if u["name"] == "Omar")
+    filed = inbox.escalate(room_id, "ما الفرق بين TWT و Klystron؟", omar, store=double.class_store)
+    page = t.get(f"/app/rooms/{room_id}/inbox")
+    assert "ما الفرق بين TWT و Klystron؟" in page.text and "بانتظار ردّك" in page.text
+    r = t.post(f"/app/rooms/{room_id}/inbox/{filed['question_id']}/answer",
+               data={"csrf_token": csrf_of(page.text), "answer": "الـ TWT يكبّر على نطاق ترددي واسع."})
+    assert "وصل ردّك للطالب" in r.text and "تم الرد" in r.text
+    study = s.get(f"/app/rooms/{room_id}/study")
+    assert "ردود معلّمك" in study.text and "يكبّر على نطاق ترددي واسع" in study.text
+    found = inbox.find_verified(room_id, "ايه الفرق بين TWT و Klystron؟", store=double.class_store)
+    assert found and found["answer"].startswith("الـ TWT")
+    assert not double.violations

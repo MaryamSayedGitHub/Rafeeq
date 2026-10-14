@@ -8,8 +8,8 @@ JSON API (the M5 section of contracts/openapi.yaml):
     GET  /teacher/sessions/{session_id}            -> LecturerSession
     POST /teacher/sessions/{session_id}/decision   -> LecturerSession (approve -> files, revise -> new draft)
     GET  /teacher/sessions/{session_id}/files/{name}
-    GET  /teacher/rooms/{room_id}/insights         -> Insights     (sample data until M4's events exist)
-    GET  /teacher/rooms/{room_id}/report           -> ClassReport  (sample data until M4's profiles exist)
+    GET  /teacher/rooms/{room_id}/insights         -> Insights     (real: questions + M4 quiz mistakes)
+    GET  /teacher/rooms/{room_id}/report           -> ClassReport  (real: M4 quiz results per topic)
 
 Pages (Jinja2 + HTMX, Arabic, right-to-left):
     GET  /teacher                       dashboard: profile, new session form, past sessions, class
@@ -29,13 +29,13 @@ from urllib.parse import quote, unquote
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from rafeeq.samples import load_sample
 from rafeeq.teacher.lecturer.controller import RevisionLimitReached, SessionNotFound, SessionNotWaiting
 from rafeeq.teacher.lecturer.long_term_store import get_profile, list_sessions, load_memory, put_profile
 from rafeeq.teacher import assets as asset_lib
-from rafeeq.teacher import class_report
+from rafeeq.teacher import class_report, inbox, parent_report
 from rafeeq.teacher.lecturer import video_discovery, video_gen, youtube_discovery
 from rafeeq.teacher.lecturer.schemas import ApproveRequest as Decision
 from rafeeq.teacher.lecturer.schemas import SessionRequest
@@ -158,8 +158,16 @@ def _get(svc: TeacherService, session_id: str) -> dict:
 
 
 def _course_rooms() -> list[dict]:
-    """Rooms the teacher can link a session to. Sample data until M1's /rooms is real."""
-    return [r for r in load_sample("my_rooms")["rooms"] if r["kind"] == "course"]
+    """Rooms the teacher can link a session to: the real class rooms (M1's platform store),
+    newest last. /teacher has its own sign-in, so every course room is listed."""
+    try:
+        from rafeeq.platform.service import get_store
+
+        rooms = sorted(get_store().db["rooms"].values(), key=lambda r: r.get("created_at", ""))
+        return [{"room_id": r["room_id"], "name": r["name"], "kind": "course"} for r in rooms]
+    except Exception as e:
+        log.warning("teacher: could not list class rooms: %s", e)
+        return []
 
 
 # ===================================================================== JSON API
@@ -455,6 +463,103 @@ def report(svc: Service, room_id: str):
     return class_report.build_report(svc.store, room_id)
 
 
+# ------------------------------------------------------------ parent report
+def _room_user(authorization: str | None, room_id: str) -> tuple[dict, dict]:
+    """(user, room) for a logged-in member or the teacher of the room (M1's Bearer token)."""
+    from rafeeq.platform import service as platform
+
+    token = platform.token_from_header(authorization) if authorization else None
+    user = platform.get_store().user_for_token(token) if token else None
+    if user is None:
+        raise HTTPException(401, "Log in first")
+    room = platform.get_store().db["rooms"].get(room_id)
+    if room is None:
+        raise HTTPException(404, "Room not found")
+    member = user["user_id"] in platform.get_store().db["members"].get(room_id, [])
+    if room["teacher_id"] != user["user_id"] and not member:
+        raise HTTPException(403, "Not a member of this room")
+    return user, room
+
+
+def _room_teacher(authorization: str | None, room_id: str) -> dict:
+    """The caller must be this room's teacher. The older teacher routes predate the platform login;
+    these carry students' data, so they check."""
+    user, room = _room_user(authorization, room_id)
+    if room["teacher_id"] != user["user_id"]:
+        raise HTTPException(403, "Only this room's teacher can do this")
+    return user
+
+
+@router.get("/teacher/rooms/{room_id}/students/{user_id}/parent-report")
+def parent_report_api(svc: Service, room_id: str, user_id: str, authorization: Auth = None):
+    from rafeeq.platform import service as platform
+
+    _room_teacher(authorization, room_id)
+    if user_id not in platform.get_store().db["members"].get(room_id, []):
+        raise HTTPException(404, "This student is not in the room")
+    report = parent_report.build(svc.store, room_id, user_id)
+    return {**report, "share_token": parent_report.make_share_token(room_id, user_id)}
+
+
+@router.get("/parent-report/{token}")
+def parent_report_shared(svc: Service, token: str):
+    parsed = parent_report.read_share_token(token)
+    if parsed is None:
+        raise HTTPException(404, "This link is invalid or has expired")
+    return parent_report.build(svc.store, *parsed)
+
+
+# ------------------------------------------------------------ inbox (questions the tutor could not answer)
+class InboxAnswerBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answer: str = Field(min_length=1, max_length=4000)
+
+
+class AssistantBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    room_id: str
+    request: str = Field(min_length=1, max_length=2000)
+
+
+@router.get("/rooms/{room_id}/inbox")
+def inbox_list(room_id: str, authorization: Auth = None):
+    """The room's teacher sees every question; a student sees only their own (with the teacher's answers)."""
+    user, room = _room_user(authorization, room_id)
+    mine = None if room["teacher_id"] == user["user_id"] else user["user_id"]
+    return {"questions": inbox.list_questions(room_id, user_id=mine)}
+
+
+@router.post("/rooms/{room_id}/inbox/{question_id}/answer")
+def inbox_answer(room_id: str, question_id: str, body: InboxAnswerBody, authorization: Auth = None):
+    _room_teacher(authorization, room_id)
+    saved = inbox.answer(room_id, question_id, body.answer)
+    if saved is None:
+        raise HTTPException(404, "Question not found")
+    return {**saved, "student_name": inbox._student_names(room_id).get(saved.get("user_id") or "", "")}
+
+
+@router.post("/rooms/{room_id}/inbox/{question_id}/draft")
+def inbox_draft(room_id: str, question_id: str, authorization: Auth = None):
+    _room_teacher(authorization, room_id)
+    question = next((q for q in inbox.list_questions(room_id) if q["question_id"] == question_id), None)
+    if question is None:
+        raise HTTPException(404, "Question not found")
+    reply = inbox.draft(room_id, question["text"])
+    if reply is None:
+        raise HTTPException(503, "No model is configured for drafts (LLM_API_KEY)")
+    return {"draft_reply": reply, "status": "waiting_for_approval"}
+
+
+@router.post("/teacher/assistant")
+def teacher_assistant(body: AssistantBody, authorization: Auth = None):
+    """A draft for the teacher's request (a message to the class, a summary...), from the room's class data."""
+    _room_teacher(authorization, body.room_id)
+    reply = inbox.assistant(body.room_id, body.request)
+    if reply is None:
+        raise HTTPException(503, "No model is configured for drafts (LLM_API_KEY)")
+    return {"draft_reply": reply, "status": "waiting_for_approval"}
+
+
 # ======================================================================== pages
 def _page(request: Request, name: str, **context) -> HTMLResponse:
     return templates.TemplateResponse(request, name, {"nav": NAV, "active": "teacher", **context})
@@ -469,9 +574,14 @@ def _error(request: Request, message: str) -> HTMLResponse:
     return _fragment(request, "teacher/_error.html", message=message)
 
 
-def _class_view() -> dict:
-    names = {t["topic_id"]: t["name"] for t in load_sample("room_topics")["topics"]}
-    return {"insights": load_sample("insights"), "report": load_sample("class_report"), "topic_names": names}
+def _class_view(store, room_id: str | None) -> dict:
+    """The dashboard's class panel for one room, from real data (class_report.py)."""
+    if not room_id:
+        return {"insights": {"top_questions": [], "common_mistakes": []},
+                "report": {"topics": [], "students_at_risk": []}, "topic_names": {}, "class_room": None}
+    return {"insights": class_report.build_insights(store, room_id),
+            "report": class_report.build_report(store, room_id),
+            "topic_names": class_report.room_topic_names(room_id), "class_room": room_id}
 
 
 @router.get("/teacher", response_class=HTMLResponse)
@@ -481,13 +591,16 @@ def dashboard(request: Request, svc: Service):
     if profile is None:
         return _page(request, "teacher/profile_form.html", profile=None, first_time=True,
                      persistent=svc.persistent)
+    rooms = _course_rooms()
+    wanted = request.query_params.get("room")
+    room_id = wanted if any(r["room_id"] == wanted for r in rooms) else (rooms[-1]["room_id"] if rooms else None)
     return _page(
         request, "teacher/dashboard.html",
         profile=profile,
         sessions=_past_sessions(svc, teacher_id),
-        rooms=_course_rooms(),
+        rooms=rooms,
         persistent=svc.persistent,
-        **_class_view(),
+        **_class_view(svc.store, room_id),
     )
 
 

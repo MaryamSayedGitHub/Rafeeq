@@ -7,8 +7,7 @@ Inputs, recorded as they happen:
     record_question(room_id, user_id, text)
         called by the platform router for every student copilot message (M1/M3 side).
     record_quiz_result(room_id, user_id, topic_id, answers)
-        for M4's POST /quiz/{quiz_id}/submit to call once it exists; until then
-        seed_class_demo.py fills it for the demo. answers = [{"question", "chosen", "correct"}].
+        called by M4's POST /quiz/{quiz_id}/submit, once per topic of the quiz. answers = [{"question", "chosen", "correct"}].
 
 Outputs, in the shapes of contracts/openapi.yaml:
     build_insights(store, room_id) -> Insights     what students ask about, mistakes that repeat
@@ -20,8 +19,9 @@ otherwise), the same store as the teacher profile and sessions:
     ("class", room_id, "questions")  key <id>  {user_id, text, time, topic_id}
     ("class", room_id, "quiz")       key <id>  {user_id, topic_id, score, total, wrong, time}
 
-Topics: M2's GET /rooms/{room_id}/topics is not implemented yet, so a topic id is the topic's
-name. Questions are put under a topic the first time a report is built: the topics of the
+Topics: the room's own topics from M2 (learned from the uploaded material) when the knowledge
+base is on, so quiz results (M4 uses the same topic ids) and questions line up; otherwise a topic
+id is the topic's name. Questions are put under a topic the first time a report is built: the topics of the
 lecturer's own sessions for that room are the candidates, the LLM picks one (or names a new
 one), and the answer is stored so each question is classified only once. Without an LLM a
 simple word-overlap match is used, and anything unmatched goes under GENERAL.
@@ -121,6 +121,22 @@ def _recent(items: list) -> list:
     return [i for i in items if (i.value.get("time") or "") >= cutoff]
 
 
+def room_topic_names(room_id: str) -> dict[str, str]:
+    """topic_id -> name of the room's own topics (M2's knowledge base, learned from the uploaded
+    material). Empty when M2 is off or nothing is indexed: the lecturer's session topics are used then."""
+    try:
+        from rafeeq.knowledge import integration
+
+        if not integration.enabled():
+            return {}
+        from rafeeq.knowledge.service import get_service
+
+        return {t["topic_id"]: t["name"] for t in get_service().list_topics(room_id)["topics"]}
+    except Exception as e:
+        log.warning("class_report: could not read the room's topics: %s", e)
+        return {}
+
+
 def _room_session_topics(store, room_id: str) -> list[str]:
     """Topics of the lecturer sessions linked to this room: the natural topic list for its questions."""
     topics: list[str] = []
@@ -198,13 +214,15 @@ def _classify_pending(store, room_id: str, questions: list) -> None:
     pending = [q for q in questions if not q.value.get("topic_id")]
     if not pending:
         return
-    candidates = _room_session_topics(store, room_id)
+    room_topics = room_topic_names(room_id)                 # M2: {topic_id: name}
+    by_name = {name: tid for tid, name in room_topics.items()}
+    candidates = list(by_name) or _room_session_topics(store, room_id)
     for start in range(0, len(pending), CLASSIFY_BATCH):
         batch = pending[start:start + CLASSIFY_BATCH]
         texts = [q.value["text"] for q in batch]
         topics = _llm_topics(texts, candidates) or [_keyword_topic(t, candidates) for t in texts]
         for item, topic in zip(batch, topics):
-            item.value["topic_id"] = topic
+            item.value["topic_id"] = by_name.get(topic, topic)  # the room's topic id when it is one of them
             try:
                 store.put(_ns(room_id, "questions"), item.key, item.value)
             except Exception as e:

@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from rafeeq.quiz import adapters
 from rafeeq.quiz import api as m4_api
 from rafeeq.quiz.contracts import QuizCreateResponse
-from rafeeq.quiz.deps import current_user_id, get_approved_items, get_chunks, get_llm, get_verifier
+from rafeeq.quiz.deps import current_user_id, get_approved_items, get_chunks, get_llm, get_room_chunks, get_verifier, material
 from rafeeq.quiz.profile import service as profile_service
 from rafeeq.quiz.profile.db import get_session
 from rafeeq.quiz.quiz import service as quiz_service
@@ -65,7 +65,9 @@ def make_quiz(
     chunks=Depends(get_chunks),
     approved=Depends(get_approved_items),
     verifier=Depends(get_verifier),
+    room_fn=Depends(get_room_chunks),
 ) -> dict:
+    chunks = material(room_fn, body.room_id, chunks)
     topic_id = (body.topic_id or "").strip() or None
     try:
         made = quiz_service.create_quiz(
@@ -97,9 +99,11 @@ def make_printable_quiz(
     chunks=Depends(get_chunks),
     approved=Depends(get_approved_items),
     verifier=Depends(get_verifier),
+    room_fn=Depends(get_room_chunks),
 ):
     """Makes a NEW quiz in paper mode and returns its printable PDF (answer sheet + questions).
     The quiz id is in the X-Quiz-Id header; use it later with POST /quizzes/{id}/grade-sheet."""
+    chunks = material(room_fn, body.room_id, chunks)
     topic_id = (body.topic_id or "").strip() or None
     try:
         made = quiz_service.create_quiz(
@@ -214,7 +218,24 @@ def submit_quiz(
     except quiz_service.AlreadySubmitted:
         raise HTTPException(status_code=409, detail="this quiz was already submitted")
     after = profile_service.get_profile(session, user_id, room_id)
+    _tell_the_teacher(room_id, user_id, items, body.answers)
     return adapters.to_contract_result(items, result, before, after)
+
+
+def _tell_the_teacher(room_id: str, user_id: str, items, answers: list[str]) -> None:
+    """M5's class report (who is struggling, repeated mistakes) is fed by every submitted quiz,
+    once per topic. Never fails the student's submission."""
+    try:
+        from rafeeq.teacher import class_report
+
+        by_topic: dict[str, list[dict]] = {}
+        for item, chosen in zip(items, answers):
+            by_topic.setdefault(item.topic_id, []).append(
+                {"question": item.stem, "chosen": chosen, "correct": item.options[item.right_choice]})
+        for topic_id, rows in by_topic.items():
+            class_report.record_quiz_result(room_id, user_id, topic_id, rows)
+    except Exception:
+        pass
 
 
 # ---------- GET /profile/summary ----------
@@ -234,8 +255,9 @@ def next_step(
     session: Session = Depends(get_session),
     user_id: str = Depends(current_user_id),
     chunks=Depends(get_chunks),
+    room_fn=Depends(get_room_chunks),
 ) -> dict:
-    names = _topic_names(chunks)
+    names = _topic_names(material(room_fn, room_id, chunks))
     profile = profile_service.get_profile(session, user_id, room_id, names)
     topic = adapters.pick_next_topic(profile)
     if topic is not None:
@@ -280,3 +302,6 @@ def install(app) -> None:
     """One call from main.py: mount the routes and use the real login."""
     app.dependency_overrides[current_user_id] = bearer_user_id
     app.include_router(router)
+    from rafeeq.quiz.copilot_hooks import connect
+
+    connect()  # the Copilot's "what next" and question events use M4 directly

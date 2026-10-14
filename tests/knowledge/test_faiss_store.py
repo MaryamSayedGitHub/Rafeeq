@@ -569,3 +569,34 @@ def test_similarities_see_chunks_added_after_the_first_call():
     assert store.similarities(_unit_pair(0), "room_A", [("f.pdf", "a3")]) == {}
     store.add(np.stack([_unit_pair(0)]), [{"chunk_id": "a3", "room_id": "room_A", "file_name": "f.pdf", "page": 9, "block_type": "text", "text": "late"}])
     assert store.similarities(_unit_pair(0), "room_A", [("f.pdf", "a3")])[("f.pdf", "a3")] == pytest.approx(1.0)
+
+
+# ---------- remove a document ----------
+# (a chunk without document_id gets its file_name as document_id, so "book" is stored as "book.pdf")
+
+def test_remove_document_drops_only_that_document_in_that_room(multi_room_store):
+    assert multi_room_store.remove_document("A", "book.pdf") == 2
+    assert len(multi_room_store) == 2
+    left = {(r.metadata["room_id"], r.metadata["document_id"]) for r in multi_room_store.search(axis(0), top_k=10)}
+    assert left == {("A", "lecture1.pdf"), ("B", "book.pdf")}  # room B's "book" is untouched
+    hit = multi_room_store.search(axis(1), top_k=1, room_id="A")[0]
+    assert hit.metadata["document_id"] == "lecture1.pdf" and hit.score == pytest.approx(1.0)
+
+
+def test_remove_unknown_document_changes_nothing_and_ids_can_be_reused(multi_room_store, tmp_path):
+    assert multi_room_store.remove_document("A", "nope") == 0
+    assert len(multi_room_store) == 4
+    multi_room_store.remove_document("A", "lecture1.pdf")
+    multi_room_store.add(np.stack([axis(2)]), [make_chunk("A", "lecture1", 1)])  # same identity, added again
+    multi_room_store.save(tmp_path)
+    again = FAISSVectorStore.load(tmp_path)
+    assert len(again) == 4
+    assert again.search(axis(2), top_k=1, room_id="A")[0].metadata["document_id"] == "lecture1.pdf"
+
+
+def test_removing_everything_leaves_a_working_empty_store(store, tmp_path):
+    store.add(np.stack([axis(0)]), [make_chunk("A", "doc", 1)])
+    assert store.remove_document("A", "doc.pdf") == 1
+    assert len(store) == 0 and store.search(axis(0)) == []
+    store.save(tmp_path)
+    assert len(FAISSVectorStore.load(tmp_path)) == 0

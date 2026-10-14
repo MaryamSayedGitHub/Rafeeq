@@ -19,6 +19,9 @@ Settings (all optional, environment variables):
     RAFEEQ_KNOWLEDGE_RETRIEVAL  hybrid | dense                    (default: hybrid)
     RAFEEQ_KNOWLEDGE_EXCLUDE    1 / 0, skip index-like pages       (default: 1)
     RAFEEQ_KNOWLEDGE_RERANK     1 to add the cross-encoder reranker (default: 0)
+    RAFEEQ_KNOWLEDGE_ROOM_TOPICS 1 = learn each room's topics from its material with an LLM (default: 1);
+                                0 = the fixed keyword taxonomy only. Uses LLM_* (else the Gemini settings).
+    RAFEEQ_KNOWLEDGE_TOPIC_MIN_SIM  below this cosine a chunk is "General" (default: 0.30)
     GEMINI_API_KEY | GOOGLE_API_KEY, GEMINI_MODEL   only for tutor_answer (Gemini through its OpenAI-compatible endpoint)
 """
 from __future__ import annotations
@@ -110,6 +113,8 @@ class KnowledgeService:
         status_callback: Callable[[str, str, str], None] | None = None,
         parse: Callable[[str], list[dict[str, Any]]] | None = None,
         llm: Any = None,
+        room_topics: bool = False,
+        topic_propose: Callable[[str, str], Any] | None = None,
     ) -> None:
         self.store_dir = Path(store_dir) if store_dir is not None else default_store_dir()
         self._embedder = embedder
@@ -120,6 +125,11 @@ class KnowledgeService:
         self._status_callback = status_callback
         self._parse = parse
         self._llm = llm
+        # Learned per-room topics (topics/room_topics.py). Off unless asked for, so tests and scripts
+        # never call an LLM by surprise; get_service() turns it on (RAFEEQ_KNOWLEDGE_ROOM_TOPICS, default 1).
+        self._room_topics_on = room_topics
+        self._topic_propose = topic_propose
+        self._room_topics: Any = None
         self._lock = threading.RLock()
         self._store: Any = None
         self._retriever_obj: Any = None
@@ -164,6 +174,34 @@ class KnowledgeService:
                                                       exclude_non_content=self._exclude, rerank=self._rerank)
             return self._retriever_obj
 
+    def room_topics(self) -> Any:
+        if self._room_topics is None:
+            from rafeeq.knowledge.topics.room_topics import RoomTopics
+
+            self._room_topics = RoomTopics(self.store_dir)
+        return self._room_topics
+
+    def _retag_for(self, room_id: str) -> Callable[[list[dict[str, Any]], Any], list[dict[str, Any]]] | None:
+        if not self._room_topics_on:
+            return None
+        from rafeeq.knowledge.topics.room_topics import default_propose
+
+        propose = self._topic_propose or default_propose()
+
+        def retag(chunks: list[dict[str, Any]], embeddings: Any) -> list[dict[str, Any]]:
+            try:
+                topics = self.room_topics()
+                topics.ensure_topics(room_id, chunks, propose, self._get_embedder())
+                ids = topics.assign(room_id, embeddings)
+            except Exception:  # topics must never make indexing fail
+                log.exception("knowledge: room topics failed for room %s; keeping keyword tags", room_id)
+                ids = None
+            if ids is None:
+                return chunks  # nothing learned (no LLM, or it failed): keep the keyword tags
+            return [{**chunk, "topic_id": topic_id} for chunk, topic_id in zip(chunks, ids)]
+
+        return retag
+
     # ------------------------------------------------------------------ indexing (M1 upload hook)
 
     def _set_status(self, room_id: str, file_id: str, status: str) -> None:
@@ -189,6 +227,30 @@ class KnowledgeService:
             return done
         self._set_status(room_id, file_id, "indexing")
         return self._pool.submit(self._index, room_id, file_id, path, display_name)
+
+    def remove_file(self, room_id: str, file_id: str) -> Future:
+        """Register with `rafeeq.platform.service.on_delete`. Runs on the same single worker as
+        indexing, so a file deleted while it is still being indexed is removed after the indexing
+        finishes. The Future resolves to the number of chunks removed and never raises."""
+        return self._pool.submit(self._remove, room_id, file_id)
+
+    def _remove(self, room_id: str, file_id: str) -> int:
+        from rafeeq.knowledge.store_persistence import save_store_safely
+
+        try:
+            with self._lock:
+                store = self._existing_store()
+                if store is None or not hasattr(store, "remove_document"):
+                    return 0
+                removed = store.remove_document(room_id, file_id)
+                if removed:
+                    save_store_safely(store, self.store_dir, store_cls=self._store_cls or type(store))
+                    self._retriever_obj = None  # the keyword (BM25) side is rebuilt without the file
+            log.info("knowledge: removed file %s from room %s (%d chunks)", file_id, room_id, removed)
+            return removed
+        except Exception:
+            log.exception("knowledge: removing file %s from room %s failed", file_id, room_id)
+            return 0
 
     @staticmethod
     def _unique_name(store: Any, room_id: str, name: str) -> str:
@@ -225,7 +287,8 @@ class KnowledgeService:
             with self._lock:
                 display_name = self._unique_name(store, room_id, display_name)
             stats = ingest_file(path, room_id, _LockedAdd(store, self._lock), embedder,
-                                document_id=file_id, file_name=display_name, parse=self._parse)
+                                document_id=file_id, file_name=display_name, parse=self._parse,
+                                retag=self._retag_for(room_id))
             with self._lock:
                 save_store_safely(store, self.store_dir, store_cls=self._store_cls)
             self._set_status(room_id, file_id, "ready")
@@ -268,8 +331,81 @@ class KnowledgeService:
             chunks = store.room_chunks(room_id) if store is not None else []
         counts = Counter(c["topic_id"] for c in chunks)
         names = {t["topic_id"]: t["name"] for t in get_default_manager().list_topics(room_id)}
+        names.update(self.room_topics().names(room_id))  # learned topics of this room win
         ordered = sorted(counts, key=lambda topic_id: (-counts[topic_id], topic_id))
         return {"topics": [{"topic_id": t, "name": names.get(t, t)} for t in ordered]}
+
+    def room_chunks(self, room_id: str) -> list[dict[str, Any]]:
+        """Every chunk of the room's material with its topic name: what M4 builds quizzes from.
+        Empty when nothing is indexed yet (never loads the embedding model)."""
+        self._text(room_id, "room_id")
+        from rafeeq.knowledge.topics import get_default_manager
+
+        with self._lock:
+            store = self._existing_store()
+            chunks = store.room_chunks(room_id) if store is not None else []
+        names = {t["topic_id"]: t["name"] for t in get_default_manager().list_topics(room_id)}
+        names.update(self.room_topics().names(room_id))
+        return [{"chunk_id": c["chunk_id"], "text": c["text"], "file_name": c["file_name"], "page": c["page"],
+                 "block_type": c.get("block_type", "text"), "topic_id": c["topic_id"],
+                 "topic_name": names.get(c["topic_id"], c["topic_id"])} for c in chunks]
+
+    def topic_for_citations(self, room_id: str, citations: list[dict[str, Any]]) -> str | None:
+        """The topic most of the cited pages belong to, so a question can count towards the
+        student's profile (TutorAnswer itself carries no topic). None when nothing matches."""
+        wanted = {(c.get("file_name"), c.get("page")) for c in citations or []}
+        if not wanted:
+            return None
+        with self._lock:
+            store = self._existing_store()
+            chunks = store.room_chunks(room_id) if store is not None else []
+        counts = Counter(c["topic_id"] for c in chunks if (c["file_name"], c["page"]) in wanted)
+        return counts.most_common(1)[0][0] if counts else None
+
+    OVERVIEW_SYSTEM = (
+        "You are Rafeeq, a patient tutor. The student asked about a lesson as a whole. Using ONLY the "
+        "excerpts below from that lesson file, explain its main idea simply: what it is about, the 3 to 5 "
+        "key points, and how they connect. Short sentences, no jargon without a one-line explanation. "
+        "Write in the language of the student's request (Arabic, including Egyptian dialect, or English); "
+        "keep technical terms in their original language when that is clearer. "
+        "Mention the page of each point like (p. 12). Never add facts that are not in the excerpts. "
+        'Reply with JSON {"answer": "<the explanation>", "pages": [<page numbers you used>]}.'
+    )
+
+    def overview(self, room_id: str, question: str, propose: Callable[[str, str], Any] | None = None
+                 ) -> dict[str, Any] | None:
+        """TutorAnswer that explains the room's most recently uploaded file as a whole ("explain the last
+        lesson simply"). Grounded in excerpts of that file only. None when nothing is indexed or no LLM."""
+        self._text(room_id, "room_id")
+        with self._lock:
+            store = self._existing_store()
+            chunks = store.room_chunks(room_id) if store is not None else []
+        if not chunks:
+            return None
+        latest = chunks[-1]["document_id"]  # the store keeps insertion order: last indexed = newest upload
+        doc = [c for c in chunks if c["document_id"] == latest]
+        step = max(1, len(doc) // 12)
+        picked = doc[::step][:12]
+        excerpts = "\n\n".join(f"(p. {c['page']}) {c['text'][:700]}" for c in picked)
+        if propose is None:
+            from rafeeq.knowledge.topics.room_topics import default_propose
+
+            propose = default_propose()
+        if propose is None:
+            return None
+        try:
+            out = propose(self.OVERVIEW_SYSTEM, f"Student's request: {question}\n\nFile: {doc[0]['file_name']}\n\n{excerpts}")
+        except Exception:
+            log.exception("knowledge: lesson overview failed")
+            return None
+        answer = str((out or {}).get("answer", "")).strip()
+        if not answer:
+            return None
+        pages_used = {int(p) for p in (out or {}).get("pages", []) if str(p).isdigit()}
+        available = sorted({c["page"] for c in picked})
+        pages = [p for p in available if p in pages_used] or available[:3]
+        return {"answer": answer, "grounded": True, "steps": [],
+                "citations": [{"file_name": doc[0]["file_name"], "page": p} for p in pages]}
 
     def source_page(self, room_id: str, file_name: str, page: int) -> dict[str, Any]:
         """SourcePage: the text of one page of one file, so a citation can be opened."""
@@ -318,7 +454,7 @@ def get_service() -> KnowledgeService:
     global _service
     with _service_lock:
         if _service is None:
-            _service = KnowledgeService()
+            _service = KnowledgeService(room_topics=_flag("RAFEEQ_KNOWLEDGE_ROOM_TOPICS", True))
         return _service
 
 

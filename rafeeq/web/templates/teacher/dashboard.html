@@ -173,8 +173,23 @@
 
 {# ------------------------------------------------------------- class #}
 <section class="t-card">
-  <h2>الفصل <span class="t-badge">بيانات تجريبية</span></h2>
-  <p class="t-muted">تصبح حقيقية عندما تُسجَّل أسئلة الطلاب ونتائج الاختبارات.</p>
+  <h2>الفصل</h2>
+  {% if rooms %}
+  <form method="get" action="/teacher" class="t-row">
+    <label>الغرفة
+      <select name="room" onchange="this.form.submit()">
+        {% for r in rooms %}<option value="{{ r.room_id }}" {{ 'selected' if r.room_id == class_room }}>{{ r.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <noscript><button type="submit">عرض</button></noscript>
+  </form>
+  <p class="t-muted">من أسئلة الطلاب ونتائج اختباراتهم الفعلية في هذه الغرفة.</p>
+  {% else %}
+  <p class="t-muted">لا توجد غرف بعد. أنشئ غرفة وادعُ طلابك من صفحة الغرف.</p>
+  {% endif %}
+  {% if class_room and not report.topics and not insights.top_questions %}
+  <p class="t-muted">لا توجد بيانات بعد: تظهر هنا بعد أن يسأل الطلاب أو يحلّوا أول اختبار.</p>
+  {% endif %}
   <div class="t-grid">
     <div>
       <h3>مستوى الفهم لكل موضوع</h3>

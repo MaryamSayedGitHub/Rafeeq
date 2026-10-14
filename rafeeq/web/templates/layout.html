@@ -39,7 +39,7 @@
     {% if user.role == 'teacher' %}
       {% set tabs = [('overview','dashboard'), ('materials','folder'), ('students','users'), ('inbox','chat'), ('insights','chart')] %}
     {% else %}
-      {% set tabs = [('study','chat'), ('materials','folder'), ('practice','quiz'), ('progress','trend'), ('learn','book')] %}
+      {% set tabs = [('study','chat'), ('study-files','file'), ('materials','folder'), ('practice','quiz'), ('progress','trend'), ('learn','book')] %}
     {% endif %}
     {% for key, ic in tabs %}
     <a class="nav-link {% if tab == key %}active{% endif %}" href="{{ u('/rooms/' ~ room.room_id ~ '/' ~ key) }}" {% if tab == key %}aria-current="page"{% endif %}>{{ icon(ic) }}<span>{{ t('tab.' ~ key) }}</span></a>

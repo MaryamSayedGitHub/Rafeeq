@@ -39,6 +39,27 @@
   </section>
 
   <aside class="stack">
+    {% if frequent %}
+    <section class="panel panel-pad">
+      <h2 class="panel-title">{{ t('insights.frequent') }}</h2>
+      <p class="muted small">{{ t('insights.frequent.note') }}</p>
+      <ul class="plain-list tq-frequent">
+        {% for f in frequent %}
+        <li>
+          <strong dir="auto">{{ f.question }}</strong>
+          <div class="tq-meta">
+            <span class="badge badge-blue">{{ f.name }}</span>
+            <span class="badge badge-green">{{ t('insights.frequent.count', n=f.count) }}</span>
+            <span class="badge badge-gray">{{ t('insights.frequent.students', n=f.students) }}</span>
+            {% if f.unanswered %}<span class="badge badge-amber">{{ t('insights.frequent.unanswered', n=f.unanswered) }}</span>{% endif %}
+            {% if f.deeper %}<span class="badge badge-gray">{{ t('insights.frequent.deeper', n=f.deeper) }}</span>{% endif %}
+          </div>
+          <a class="btn btn-soft btn-sm" href="{{ u(f.href) }}">{{ icon('sparkle', 16) }}<span>{{ t('insights.prepare') }}</span></a>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
     <section class="panel panel-pad">
       <h2 class="panel-title">{{ t('insights.mastery') }}</h2>
       {% if report_res.ok %}

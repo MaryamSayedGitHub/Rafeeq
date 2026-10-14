@@ -32,6 +32,21 @@
           <h4 class="bubble-sub">{{ t('answer.steps') }}</h4>
           <ol class="step-list">{% for s in p.steps %}<li>{{ s }}</li>{% endfor %}</ol>
         {% endif %}
+        {% if p.notice %}
+          <div class="inline-note note-warning">{{ icon('alert', 16) }}<span>{{ p.notice }}</span></div>
+        {% endif %}
+        {% if p.web_sources %}
+          <div class="inline-note">{{ icon('info', 16) }}<span>{{ t('tutor.web_answer') }}</span></div>
+          <div class="sources">
+            <span class="sources-label">{{ t('tutor.sources') }}</span>
+            {% for s in p.web_sources %}
+            <a class="source-chip" href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ icon('file', 14) }}<span dir="auto">[{{ s.n }}] {{ s.title }}</span></a>
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if p.answer_flagged %}
+          <div class="inline-note note-warning">{{ icon('alert', 16) }}<span>{{ t('tutor.flagged') }}</span></div>
+        {% endif %}
         {% if p.citations %}
           <div class="sources">
             <span class="sources-label">{{ t('answer.sources') }}</span>
@@ -42,6 +57,7 @@
             {% endfor %}
           </div>
         {% endif %}
+        {% if not p.sample and not p.verified_by_teacher %}{% include "partials/tutor_ask_extras.html" %}{% endif %}
 
       {% elif route == 'check_work' %}
         {% if p.needs_photo %}
@@ -49,9 +65,22 @@
         {% else %}
           <h4 class="bubble-title">{{ t('check.title') }}</h4>
           {% if file_id %}
-            <div class="photo-frame" data-photo-slot data-file-id="{{ file_id }}" data-boxes='{{ (p.boxes or []) | tojson }}'></div>
+            <div class="photo-frame" data-photo-slot data-file-id="{{ file_id }}" data-boxes='{{ (p.item_boxes or p.boxes or []) | tojson }}'></div>
           {% endif %}
           {% set wrong = p.steps | selectattr('correct', 'equalto', false) | list %}
+          {% set work_items = p.get('items') %}{% if work_items %}
+          <ol class="work-steps tq-steps">
+            {% for it in work_items %}
+            <li class="tq-{{ it.status }}">
+              {{ icon({'ok': 'check_circle', 'check': 'info', 'error': 'x_circle'}[it.status], 18) }}
+              <span class="work-step-text" dir="auto">{{ it.text }}</span>
+              <small>{{ t('tutor.legend.' ~ it.status) }}</small>
+              {% if it.hint %}<div class="tq-step-hint" dir="auto">{{ icon('bulb', 14) }} {{ it.hint }}</div>{% endif %}
+            </li>
+            {% endfor %}
+          </ol>
+          <p class="muted small tq-legend"><i class="tq-dot tq-ok"></i>{{ t('tutor.legend.ok') }} <i class="tq-dot tq-check"></i>{{ t('tutor.legend.check') }} <i class="tq-dot tq-error"></i>{{ t('tutor.legend.error') }}</p>
+          {% else %}
           <ol class="work-steps">
             {% for s in p.steps %}
             <li class="{{ 'is-correct' if s.correct else 'is-wrong' }}">
@@ -61,10 +90,18 @@
             </li>
             {% endfor %}
           </ol>
-          {% if wrong %}
+          {% endif %}
+          {% if p.needs_clarification %}
+            <div class="hint">{{ icon('info', 18) }}<div><strong>{{ t('tutor.clarify.title') }}</strong><p>{{ p.clarification }}</p></div></div>
+          {% elif wrong or (p.needs_help and not p.complete) %}
             <div class="hint">{{ icon('bulb', 18) }}<div><strong>{{ t('check.hint') }}</strong><p>{{ p.hint }}</p></div></div>
           {% else %}
             <div class="inline-note note-success">{{ icon('check_circle', 16) }}<span>{{ t('check.all_correct') }}</span></div>
+          {% endif %}
+          {% if p.help_key %}
+            {% set key = p.help_key %}
+            {% set solution_only = not p.needs_help %}
+            {% include "partials/tutor_help_panel.html" %}
           {% endif %}
         {% endif %}
 

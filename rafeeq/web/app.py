@@ -20,6 +20,7 @@ from rafeeq.web import views_rooms as rooms
 from rafeeq.web import views_student as student
 from rafeeq.web import views_studios as studios
 from rafeeq.web import views_teacher as teacher
+from rafeeq.web import views_tutor as tutor
 from rafeeq.web.api import Api
 from rafeeq.web.common import HERE, Redirect, is_htmx, notice, render, tr
 
@@ -41,9 +42,18 @@ def _routes() -> list:
         R("/rooms/create", rooms.rooms_create, methods=["POST"]),
         R(room, rooms.room_home, methods=["GET"]),
         # student
-        R(room + "/study", student.study_page, methods=["GET"]),
-        R(room + "/study/message", student.study_message, methods=["POST"]),
+        R(room + "/study", tutor.study_page, methods=["GET"]),
+        R(room + "/study/message", tutor.remembering(student.study_message), methods=["POST"]),
         R(room + "/study/photo", student.study_photo, methods=["POST"]),
+        R(room + "/study/agent", tutor.remembering(tutor.agent_action, {"research"}), methods=["POST"]),
+        R(room + "/study/quiz-result", tutor.quiz_result, methods=["POST"]),
+        R(room + "/study/chats/{cid}/delete", tutor.chat_delete, methods=["POST"]),
+        R(room + "/study/memory/forget", tutor.memory_delete, methods=["POST"]),
+        R(room + "/study/memory/{nid:int}/delete", tutor.memory_delete, methods=["POST"]),
+        R(room + "/study-files", tutor.files_page, methods=["GET"]),
+        R(room + "/study-files/{fid:int}", tutor.file_page, methods=["GET"]),
+        R(room + "/study-files/{fid:int}/download", tutor.file_download, methods=["GET"]),
+        R(room + "/study-files/{fid:int}/delete", tutor.file_delete, methods=["POST"]),
         R(room + "/practice", student.practice_page, methods=["GET"]),
         R(room + "/practice/quiz", student.practice_quiz, methods=["POST"]),
         R(room + "/practice/submit", student.practice_submit, methods=["POST"]),

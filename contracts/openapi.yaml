@@ -308,6 +308,137 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/HandwritingCheck" }
 
+  # ---- M3 room routes: the Ask panel, handwriting check, question log, anonymous questions for M5 ----
+  /rooms/{room_id}/ask:
+    post:
+      tags: [M3 tutor]
+      operationId: roomAsk
+      summary: Ask a question. Level 1 = grounded answer with citations (or "not found" + offer_level2); Level 2 = web research + a saved study file.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoomAskRequest" }
+      responses:
+        "200":
+          description: Sample files samples/room_ask.json (level 1) and samples/room_ask_level2.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomAskResponse" }
+
+  /rooms/{room_id}/vision/check-work:
+    post:
+      tags: [M3 tutor]
+      operationId: visionCheckWork
+      summary: Photo of handwriting -> OpenCV -> lines -> vision model -> course passages -> every line ok / check / error with one hint. Blurry photo -> retake_tip.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [photo]
+              properties:
+                photo: { type: string, format: binary }
+                language: { $ref: "#/components/schemas/Language" }
+                annotate: { type: boolean, description: "true = also return the page with coloured boxes as a base64 PNG" }
+      responses:
+        "200":
+          description: Sample file samples/vision_check.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VisionCheck" }
+
+  /rooms/{room_id}/questions:
+    get:
+      tags: [M3 tutor]
+      operationId: listMyQuestions
+      summary: The signed-in student's own question log in this room (newest first).
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
+      responses:
+        "200":
+          description: Sample file samples/logged_questions.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoggedQuestions" }
+
+  /rooms/{room_id}/instructor/questions:
+    get:
+      tags: [M3 tutor]
+      operationId: instructorQuestions
+      summary: The room's questions with NO names or student ids (for M5). format=csv returns the same rows as CSV.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+        - { name: format, in: query, required: false, schema: { type: string, enum: [json, csv], default: json } }
+      responses:
+        "200":
+          description: Sample file samples/instructor_questions.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InstructorQuestions" }
+
+  /rooms/{room_id}/tutor/act:
+    post:
+      tags: [M3 tutor]
+      operationId: tutorAct
+      summary: The tutor agent under M1's Copilot. One entry for Ask (Level 1 / 2), quiz, summary, flashcards, study files, rewrite, hints and handwriting.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TutorActRequest" }
+      responses:
+        "200":
+          description: Sample file samples/tutor_act.json (result is a RoomAskResponse for ask and research)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TutorActResponse" }
+
+  /rooms/{room_id}/instructor/frequent:
+    get:
+      tags: [M3 tutor]
+      operationId: instructorFrequent
+      summary: What students ask again and again (same topic, nearly the same words), most asked first. No names, no ids. For the teacher's class insights.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+        - { name: min_count, in: query, required: false, schema: { type: integer, minimum: 2, maximum: 100, default: 2 } }
+      responses:
+        "200":
+          description: Sample file samples/frequent_questions.json
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FrequentQuestions" }
+
+  /rooms/{room_id}/instructor/publish:
+    post:
+      tags: [M3 tutor]
+      operationId: instructorPublish
+      summary: Write the anonymous question file and POST it to M5 (M5_PUBLISH_URL) when that is set.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+      responses:
+        "200":
+          description: Result of the publish
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [count, file, posted, error]
+                properties:
+                  count: { type: integer, minimum: 0 }
+                  file: { type: string }
+                  posted: { type: boolean }
+                  error: { type: string }
+
   # ---------------------------------------------------------------- M4
   /quiz:
     post:
@@ -1730,6 +1861,214 @@ components:
         hint:
           type: string
           description: a nudge, never the full solution
+
+    # ---- M3 room routes ------------------------------------------------------
+    RoomAskRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        question: { type: string, minLength: 1, maxLength: 2000 }
+        level: { type: integer, enum: [1, 2], default: 1 }
+        language: { $ref: "#/components/schemas/Language" }
+        pages: { type: integer, minimum: 1, maximum: 15, description: "Level 2: study file length in pages (default 1)" }
+        topic_id: { type: string, description: "search only the passages of this topic" }
+        parent_question_id: { type: integer, description: "Level 2 pressed after an ungrounded Level 1" }
+        quiz: { type: boolean, default: false, description: "also make the 3 MCQ; by default they are made only when the student asks for them" }
+
+    StudySource:
+      type: object
+      additionalProperties: false
+      required: [n, title, url]
+      properties:
+        n: { type: integer }
+        title: { type: string }
+        url: { type: string }
+
+    RoomStudyFile:
+      type: object
+      additionalProperties: false
+      required: [id, title, markdown, words, degraded, sources, queries]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        markdown: { type: string, description: "overview, key ideas, worked example, sources" }
+        words: { type: integer }
+        degraded: { type: boolean, description: "true = built from search snippets because the AI model was not reachable" }
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/StudySource" }
+        queries:
+          type: array
+          items: { type: string }
+
+    AskQuizQuestion:
+      type: object
+      additionalProperties: false
+      required: [question, options, answer, explanation]
+      properties:
+        question: { type: string }
+        options:
+          type: array
+          items: { type: string }
+        answer: { type: integer, minimum: 0, description: "index of the right option" }
+        explanation: { type: string }
+
+    RoomAskResponse:
+      type: object
+      additionalProperties: false
+      required: [question_id, topic_id, level, answer, citations, grounded, steps, offer_level2, material_source, study_file, quiz, error, event_delivered]
+      properties:
+        question_id: { type: integer }
+        topic_id: { type: string }
+        level: { type: integer, enum: [1, 2] }
+        answer: { type: string }
+        citations:
+          type: array
+          items: { $ref: "#/components/schemas/Citation" }
+        grounded: { type: boolean }
+        steps:
+          type: array
+          items: { type: string }
+        offer_level2: { type: boolean, description: "true when Level 1 found nothing: offer the student Level 2" }
+        material_source: { type: string, enum: [m2, sample, none, given, web] }
+        citation_support: { type: string, enum: [supported, unsupported, unchecked, none], description: "do the cited M2 passages support the answer? unchecked = answer and passage are in different scripts" }
+        answer_flagged: { type: boolean, description: "the model's answer was withheld because its own citations did not support it" }
+        language: { $ref: "#/components/schemas/Language" }
+        web_sources:
+          type: array
+          items: { $ref: "#/components/schemas/StudySource" }
+          description: "a term answered from the web (no study file): the pages it came from"
+        study_file:
+          anyOf:
+            - { $ref: "#/components/schemas/RoomStudyFile" }
+            - { type: "null" }
+        quiz:
+          type: array
+          items: { $ref: "#/components/schemas/AskQuizQuestion" }
+        error:
+          type: [string, "null"]
+        event_delivered: { type: boolean, description: "the question event reached M4" }
+
+    VisionStep:
+      type: object
+      additionalProperties: false
+      required: [i, text, status, hint, box]
+      properties:
+        i: { type: integer, minimum: 1 }
+        text: { type: string }
+        status: { type: string, enum: [ok, check, error] }
+        hint: { type: string, description: "exactly one short hint for a step that is not ok, empty for ok; never the corrected line or the answer" }
+        box: { $ref: "#/components/schemas/Box" }
+
+    VisionCheck:
+      type: object
+      additionalProperties: false
+      required: [file_id, quality_ok, retake_tip, type, language, confidence, kind, complete, needs_help, hint, lines, citations, event_delivered, annotated_png_base64]
+      properties:
+        file_id: { type: string }
+        quality_ok: { type: boolean }
+        retake_tip: { type: string, description: "filled when the photo is blurry or dark" }
+        type: { type: string, enum: [student_work, material, diagram, other] }
+        language: { $ref: "#/components/schemas/Language" }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        kind: { type: string, enum: [question, math, code] }
+        complete: { type: boolean }
+        needs_help: { type: boolean }
+        hint: { type: string }
+        needs_clarification: { type: boolean, description: "a line could not be read reliably: it is marked check and the student is asked what it says; nothing was judged" }
+        clarification: { type: string }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/VisionStep" }
+        citations:
+          type: array
+          items: { $ref: "#/components/schemas/Citation" }
+        event_delivered: { type: boolean }
+        annotated_png_base64:
+          type: [string, "null"]
+
+    LoggedQuestion:
+      type: object
+      additionalProperties: false
+      required: [question_id, ts, question, topic_id, level, grounded, study_file_id]
+      properties:
+        question_id: { type: integer }
+        ts: { type: string }
+        question: { type: string }
+        topic_id: { type: string }
+        level: { type: integer }
+        grounded: { type: boolean }
+        study_file_id:
+          type: [integer, "null"]
+
+    LoggedQuestions:
+      type: array
+      items: { $ref: "#/components/schemas/LoggedQuestion" }
+
+    InstructorQuestion:
+      type: object
+      additionalProperties: false
+      description: One question with no student name, id or e-mail (those are removed from the text too).
+      required: [public_id, date, topic_id, level, grounded, question]
+      properties:
+        public_id: { type: string, description: "random, not derived from the student" }
+        date: { type: string, description: "the day, YYYY-MM-DD" }
+        topic_id: { type: string }
+        level: { type: integer }
+        grounded: { type: boolean }
+        question: { type: string }
+
+    InstructorQuestions:
+      type: array
+      items: { $ref: "#/components/schemas/InstructorQuestion" }
+
+    TutorActRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        action: { type: string, enum: [auto, ask, explain, research, quiz, summary, cards, files, file, rewrite, help, hint, solution, check], default: auto }
+        text: { type: string, maxLength: 4000, default: "", description: "the question, the problem, the answer to rewrite, or the steps to check (by action)" }
+        language: { anyOf: [{ $ref: "#/components/schemas/Language" }, { type: "null" }] }
+        pages: { type: [integer, "null"], minimum: 1, maximum: 10, description: "research: study file length in pages" }
+        topic_id: { type: [string, "null"] }
+        parent_question_id: { type: [integer, "null"] }
+        study_file_id: { type: [integer, "null"], description: "quiz, summary, cards, file" }
+        mode: { type: [string, "null"], enum: [simpler, example, compare, null] }
+        other: { type: [string, "null"], maxLength: 200 }
+        question: { type: [string, "null"], maxLength: 2000 }
+        key: { type: [string, "null"], description: "hint, solution: the key returned by action help" }
+        n: { type: [integer, "null"], minimum: 1, maximum: 3 }
+        file_id: { type: [string, "null"] }
+        confidence: { type: [number, "null"], minimum: 0, maximum: 1 }
+        with_quiz: { type: [boolean, "null"], description: "ask: also make the 3 MCQ (default: no)" }
+        notify: { type: [boolean, "null"], description: "false: log the question but do not send the M4 event (the caller sends it)" }
+
+    TutorActResponse:
+      type: object
+      additionalProperties: false
+      required: [action, ok, error, result]
+      properties:
+        action: { type: string, description: "the tool that ran (auto resolves to ask or help)" }
+        ok: { type: boolean }
+        error: { type: [string, "null"] }
+        result: { type: object, additionalProperties: true, description: "shape depends on the action: RoomAskResponse for ask and research; files, file, quiz, summary, cards, rewrite, help, hint, solution, check" }
+
+    FrequentQuestion:
+      type: object
+      additionalProperties: false
+      required: [topic_id, question, count, students, unanswered, deeper]
+      properties:
+        topic_id: { type: string }
+        question: { type: string }
+        count: { type: integer, minimum: 1 }
+        students: { type: integer, minimum: 1, description: "how many different students asked it (a number, never who)" }
+        unanswered: { type: integer, minimum: 0, description: "times the course material had no answer" }
+        deeper: { type: integer, minimum: 0, description: "times a student went to Level 2" }
+
+    FrequentQuestions:
+      type: array
+      items: { $ref: "#/components/schemas/FrequentQuestion" }
 
     # ---- M4 ------------------------------------------------------------------
     MakeQuizRequest:

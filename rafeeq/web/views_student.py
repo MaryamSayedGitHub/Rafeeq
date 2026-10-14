@@ -4,6 +4,7 @@ Materials and the source viewer are shared with teachers and live here too.
 """
 from __future__ import annotations
 
+import secrets
 from urllib.parse import quote
 
 from starlette.requests import Request
@@ -12,6 +13,7 @@ from rafeeq.web import api as A
 from rafeeq.web.common import api, api_message, check_csrf, flash, notice, redirect, render, tr
 from rafeeq.web.i18n import strip_isolates
 from rafeeq.web.views_rooms import ensure_session, gather, load_room, topic_names
+from rafeeq.web.views_tutor import explain_turn
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 MAX_BYTES = 25 * 1024 * 1024
@@ -44,8 +46,10 @@ async def study_message(request: Request):
     text = strip_isolates(str(form.get("text", ""))).strip()
     question = strip_isolates(str(form.get("question", ""))).strip()
 
+    explain_text = ""
     if file_id and mode == "ask":
         shown = question or tr(request, "snap.default_question")
+        explain_text = f"{question}\n{text}".strip() if question else text     # what the photo says (+ what they asked), not "explain the photo"
         text = f"{shown}\n\n{text}" if text else shown
     elif file_id and mode == "check_work":
         shown = tr(request, "snap.check")
@@ -54,6 +58,10 @@ async def study_message(request: Request):
     if not text:
         return notice(request, tr(request, "error.empty_question"), "warning")
 
+    if file_id and mode == "ask":                                  # explain what is in the photo: the material first, then the web
+        turn = await explain_turn(request, user, room, shown, explain_text or text)
+        if turn is not None:
+            return turn
     body = {"room_id": room["room_id"], "text": text[:4000], "mode": mode}
     if file_id:
         body["file_id"] = file_id
@@ -62,7 +70,7 @@ async def study_message(request: Request):
     names: dict = {}
     if res.ok and res.data.get("route") in ("quiz", "plan"):
         _, names = await topic_names(request, user, room["room_id"])
-    return render(request, "partials/chat_turn.html", room=room, shown=shown, file_id=file_id, res=res,
+    return render(request, "partials/chat_turn.html", room=room, shown=shown, file_id=file_id, res=res, turn_id=secrets.token_hex(4),
                   reply=res.data if res.ok else None, topic_names=names,
                   error=None if res.ok else api_message(request, res))
 

@@ -135,10 +135,11 @@ async def students_draft(request: Request):
 async def insights_page(request: Request):
     user, room, rooms = await load_room(request, request.path_params["room_id"], "teacher")
     rid, tok = room["room_id"], user["token"]
-    insights_res, report_res, (_, names) = await gather(
+    insights_res, report_res, (_, names), frequent_res = await gather(
         api(request).get(f"/teacher/rooms/{rid}/insights", token=tok),
         api(request).get(f"/teacher/rooms/{rid}/report", token=tok),
         topic_names(request, user, rid),
+        api(request).get(f"/rooms/{rid}/instructor/frequent", token=tok),         # M3: what students ask again and again (anonymous)
     )
     ensure_session(request, insights_res)
     cards = []
@@ -153,8 +154,14 @@ async def insights_page(request: Request):
             cards.append({"name": name, "count": q["count"], "example": q["example"],
                           "mistakes": mistakes.get(q["topic_id"], []),
                           "href": _studio_link(rid, name, "\n".join(notes))})
+    frequent = []
+    if frequent_res.ok and isinstance(frequent_res.data, list):
+        for f in frequent_res.data:
+            name = names.get(f["topic_id"], f["topic_id"])
+            note = tr(request, "insights.notes_questions", _iso=False, q=f["question"])
+            frequent.append({**f, "name": name, "href": _studio_link(rid, name, note)})
     return render(request, "room/insights.html", room=room, rooms=rooms, tab="insights", insights_res=insights_res,
-                  report_res=report_res, cards=cards, topic_names=names)
+                  report_res=report_res, cards=cards, topic_names=names, frequent=frequent)
 
 
 # ---------------------------------------------------------------- studio

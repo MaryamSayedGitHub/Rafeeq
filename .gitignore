@@ -8,3 +8,4 @@ data/
 *.log
 outputs/
 storage/
+*.db

@@ -78,6 +78,9 @@ def open_teacher_service() -> Iterator[TeacherService]:
         from rafeeq.teacher import class_report
 
         class_report.set_store(service.store)  # student questions/quiz results live in the same store
+        from rafeeq.teacher import inbox
+
+        inbox.connect()  # the Copilot files unanswered questions here and reuses the teacher's answers
         try:
             yield service
         finally:

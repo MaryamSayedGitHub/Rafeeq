@@ -15,7 +15,7 @@ from rafeeq.quiz.contracts import (
     SubmitResponse,
     WrongAnswerRow,
 )
-from rafeeq.quiz.deps import current_user_id, get_approved_items, get_chunks, get_llm, get_verifier
+from rafeeq.quiz.deps import current_user_id, get_approved_items, get_chunks, get_llm, get_room_chunks, get_verifier, material
 from rafeeq.quiz.profile import service
 from rafeeq.quiz.profile.db import get_session
 from rafeeq.quiz.quiz import service as quiz_service
@@ -61,7 +61,9 @@ def create_quiz(
     chunks=Depends(get_chunks),
     approved=Depends(get_approved_items),
     verifier=Depends(get_verifier),
+    room_fn=Depends(get_room_chunks),
 ):
+    chunks = material(room_fn, room_id, chunks)
     try:
         return quiz_service.create_quiz(
             session,

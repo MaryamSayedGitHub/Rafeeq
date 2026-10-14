@@ -126,3 +126,16 @@ def test_report_endpoints_serve_the_computed_data(monkeypatch):
         insights = client.get("/teacher/rooms/r_api/insights").json()
     assert_matches("ClassReport", report) and report["topics"][0]["status"] == "struggling"
     assert_matches("Insights", insights) and insights["top_questions"][0]["count"] == 1
+
+
+def test_questions_are_grouped_under_the_rooms_own_topics_when_m2_has_them(store, monkeypatch):
+    monkeypatch.setattr(cr, "room_topic_names", lambda room_id: {"topic_01": "Slow-Wave Structures",
+                                                                 "topic_02": "Electron-Beam Interaction"})
+    cr.record_question(ROOM, "u_omar", "how do slow-wave structures slow the wave?", store=store)
+    cr.record_question(ROOM, "u_sara", "what is a Floquet harmonic?", store=store, topic_id="topic_01")
+    top = cr.build_insights(store, ROOM)["top_questions"]
+    assert top == [{"topic_id": "topic_01", "count": 2, "example": top[0]["example"]}]
+    quiz(store, "u_omar", "topic_02", 1, 5)  # M4 sends the same topic ids
+    report = cr.build_report(store, ROOM)
+    assert report["topics"][0]["topic_id"] == "topic_02"
+    assert report["students_at_risk"][0]["topic_ids"] == ["topic_02"]

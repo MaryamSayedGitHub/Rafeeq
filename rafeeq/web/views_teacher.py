@@ -394,3 +394,58 @@ async def profile_avatar(request: Request):
         raise HTTPException(status_code=404, detail="avatar")
     return Response(res.content, media_type=res.headers.get("content-type", "image/jpeg"),
                     headers={"Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------- parent report
+
+async def parent_report_page(request: Request):
+    user, room, rooms = await load_room(request, request.path_params["room_id"], "teacher")
+    uid = request.path_params["user_id"]
+    res = await api(request).get(f"/teacher/rooms/{room['room_id']}/students/{quote(uid, safe='')}/parent-report",
+                                 token=user["token"])
+    ensure_session(request, res)
+    share_url = ""
+    if res.ok and res.data.get("share_token"):
+        share_url = f"{request.url.scheme}://{request.url.netloc}" + u(request, f"/p/{res.data['share_token']}")
+    return render(request, "room/parent_report.html", room=room, rooms=rooms, tab="students",
+                  report_res=res, share_url=share_url)
+
+
+async def parent_report_shared(request: Request):
+    res = await api(request).get(f"/parent-report/{quote(request.path_params['token'], safe='')}")
+    return render(request, "parent/shared.html", report=res.data if res.ok else None,
+                  status=200 if res.ok else 404)
+
+
+# ---------------------------------------------------------------- inbox
+
+async def inbox_page(request: Request):
+    user, room, rooms = await load_room(request, request.path_params["room_id"], "teacher")
+    res = await api(request).get(f"/rooms/{room['room_id']}/inbox", token=user["token"])
+    ensure_session(request, res)
+    return render(request, "room/inbox.html", room=room, rooms=rooms, tab="inbox", inbox_res=res)
+
+
+async def inbox_draft(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    await check_csrf(request)
+    qid = request.path_params["question_id"]
+    res = await api(request).post(f"/rooms/{room['room_id']}/inbox/{quote(qid, safe='')}/draft",
+                                  token=user["token"], timeout=90)
+    ensure_session(request, res)
+    if not res.ok:
+        return notice(request, api_message(request, res), "warning")
+    return render(request, "partials/inbox_draft.html", question_id=qid, draft=res.data["draft_reply"])
+
+
+async def inbox_answer(request: Request):
+    user, room, _ = await load_room(request, request.path_params["room_id"], "teacher")
+    form = await check_csrf(request)
+    text = str(form.get("answer", "")).strip()
+    qid = request.path_params["question_id"]
+    if text:
+        res = await api(request).post(f"/rooms/{room['room_id']}/inbox/{quote(qid, safe='')}/answer",
+                                      token=user["token"], json={"answer": text[:4000]})
+        ensure_session(request, res)
+        flash(request, "success" if res.ok else "error", tr(request, "inbox.sent") if res.ok else api_message(request, res))
+    return redirect(request, f"/rooms/{room['room_id']}/inbox")

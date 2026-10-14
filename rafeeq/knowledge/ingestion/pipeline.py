@@ -84,6 +84,7 @@ def ingest_file(
     min_text_chars: int = DEFAULT_MIN_TEXT_CHARS,
     save_dir: str | Path | None = None,
     parse: Callable[[str], list[dict[str, Any]]] | None = None,
+    retag: Callable[[list[dict[str, Any]], Any], list[dict[str, Any]]] | None = None,
 ) -> IngestionStats:
     """Ingest one PDF into ``vector_store`` under ``room_id``.
 
@@ -104,6 +105,8 @@ def ingest_file(
             keep their parser text and are reported in the stats.
         save_dir: if given, ``vector_store.save(save_dir)`` runs after adding.
         parse: override the parser (mainly for tests); defaults to ``parse_pdf``.
+        retag: optional ``(chunks, embeddings) -> chunks`` run after embedding, e.g. to give the
+            chunks the room's learned topics instead of the keyword tags (see topics/room_topics.py).
 
     Raises:
         NoTextExtractedError: nothing to index after parsing / extraction.
@@ -155,6 +158,10 @@ def ingest_file(
         raise RuntimeError(
             f"embedder returned {len(embeddings)} vectors for {len(chunks)} chunks; refusing to index"
         )
+
+    # 5b. optional retagging with the vectors we already have (no second embedding pass)
+    if retag is not None:
+        chunks = retag(chunks, embeddings)
 
     # 6. add (all-or-nothing) and 7. save
     added = vector_store.add(embeddings, chunks)

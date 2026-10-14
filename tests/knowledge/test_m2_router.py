@@ -33,6 +33,7 @@ def running(tmp_path, enabled=True):
     store = platform.PlatformStore(tmp_path / "platform", seed_demo=False)
     platform.set_store(store)
     platform.clear_upload_hooks()
+    platform.clear_delete_hooks()
     integration._hook_installed = False
     knowledge.set_service(knowledge.KnowledgeService(
         tmp_path / "kb", embedder=HashingEmbedder(), status_callback=store.set_file_status,
@@ -42,6 +43,7 @@ def running(tmp_path, enabled=True):
         yield app, store, integration.install(app)
     finally:
         platform.clear_upload_hooks()
+        platform.clear_delete_hooks()
         platform.set_store(None)
         knowledge.set_service(None)
         integration._hook_installed = False

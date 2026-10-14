@@ -173,3 +173,74 @@ def test_the_login_check_rejects_a_missing_token():
     with pytest.raises(HTTPException) as e:
         bearer_user_id(None)
     assert e.value.status_code == 401
+
+
+# ---------- the room's own material (M2) instead of the development book ----------
+
+ROOM = [
+    {"chunk_id": f"r-{t}{p}", "text": "y" * 500, "file_name": "twt.pdf", "page": p,
+     "topic_id": t, "topic_name": n}
+    for t, n in (("topic_01", "Slow-Wave Structures"), ("topic_02", "Electron-Beam Interaction")) for p in range(1, 6)
+]
+
+
+def test_quiz_uses_the_rooms_material_when_the_knowledge_base_has_it(client):
+    from rafeeq.quiz.deps import get_room_chunks
+
+    client.app.dependency_overrides[get_room_chunks] = lambda: (lambda room_id: ROOM if room_id == "r1" else [])
+    quiz = make(client, topic_id="topic_01")
+    assert quiz["topic_id"] == "topic_01"
+    step = client.get("/next-step", params={"room_id": "r1"})
+    assert step.status_code == 200 and step.json()["topic_id"] in {"topic_01", "topic_02"}
+    r = client.post("/quiz", json={"room_id": "r1", "topic_id": "a", "count": 3})
+    assert r.status_code == 404  # the book's topics are not this room's topics
+
+
+def test_a_room_with_nothing_indexed_has_no_topics_instead_of_the_book(client):
+    from rafeeq.quiz.deps import get_room_chunks
+
+    client.app.dependency_overrides[get_room_chunks] = lambda: (lambda room_id: [])
+    assert client.get("/next-step", params={"room_id": "r1"}).status_code == 404
+
+
+def test_a_missing_llm_key_is_a_503_not_a_crash(client, monkeypatch):
+    from rafeeq.quiz import deps
+
+    client.app.dependency_overrides.pop(get_llm)
+    deps._llm.cache_clear()
+    monkeypatch.setenv("M4_LLM_PROVIDER", "compatible")
+    monkeypatch.setenv("LLM_API_KEY", "")
+    try:
+        r = client.post("/quiz", json={"room_id": "r1", "topic_id": "", "count": 3})
+        assert r.status_code == 503 and "not configured" in r.json()["detail"]
+    finally:
+        deps._llm.cache_clear()
+
+
+def test_copilot_hooks_give_a_next_step_from_the_rooms_material(monkeypatch):
+    from rafeeq.quiz import copilot_hooks, deps
+
+    monkeypatch.setattr(deps, "room_chunks", lambda room_id: ROOM)
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(copilot_hooks, "get_engine", lambda: engine)
+    step = copilot_hooks.next_step("r1", "u1")
+    assert step["topic_id"] in {"topic_01", "topic_02"} and "«" in step["suggestion"]
+    assert copilot_hooks.next_step("r1", None) is None
+    copilot_hooks.record_event({"user_id": "u1", "room_id": "r1", "topic_id": "topic_01", "kind": "question",
+                                "text": "what is a TWT?", "time": "2026-10-13T20:00:00+00:00"})
+    copilot_hooks.record_event({"bad": "event"})  # never raises
+
+
+def test_a_submitted_quiz_feeds_the_teachers_class_report(client, monkeypatch):
+    from rafeeq.teacher import class_report
+
+    sent = []
+    monkeypatch.setattr(class_report, "record_quiz_result",
+                        lambda room_id, user_id, topic_id, answers, **kw: sent.append((room_id, user_id, topic_id, answers)) or True)
+    quiz = make(client)
+    r = client.post(f"/quiz/{quiz['quiz_id']}/submit", json={"answers": answers_for(quiz, right=False)})
+    assert r.status_code == 200
+    assert sent and all(room == "r1" and user == "u1" for room, user, _, _ in sent)
+    rows = [row for *_, answers in sent for row in answers]
+    assert len(rows) == len(quiz["questions"]) and all(row["chosen"] != row["correct"] for row in rows)

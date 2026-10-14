@@ -21,11 +21,11 @@ def assert_reply_schema(reply):
 def clean(monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("RAFEEQ_ALLOW_SAMPLES", raising=False)
-    for name in ("tutor_answer", "check_work", "make_quiz", "next_step", "find_verified", "escalate", "record_event"):
+    for name in ("tutor_answer", "check_work", "make_quiz", "next_step", "find_verified", "escalate", "record_event", "overview", "topic_of"):
         clients.disconnect(name)
     clear_history()
     yield
-    for name in ("tutor_answer", "check_work", "make_quiz", "next_step", "find_verified", "escalate", "record_event"):
+    for name in ("tutor_answer", "check_work", "make_quiz", "next_step", "find_verified", "escalate", "record_event", "overview", "topic_of"):
         clients.disconnect(name)
 
 
@@ -88,3 +88,51 @@ def test_history_is_per_student():
     handle_message("r_1", "Explain cells", user_id="u_a")
     from rafeeq.copilot.supervisor import _HISTORY
     assert ("r_1", "u_a") in _HISTORY and ("r_1", "u_b") not in _HISTORY
+
+
+def test_with_m4_connected_plan_and_quiz_use_the_students_profile():
+    calls = []
+
+    def step(room_id, user_id):
+        calls.append((room_id, user_id))
+        return {"topic_id": "topic_02", "suggestion": "راجع موضوع «Slow-Wave Structures» ثم جرّب اختبارًا قصيرًا."}
+
+    clients.connect("next_step", step)
+    plan = handle_message("r_1", "أذاكر إيه النهارده؟", user_id="u_1")
+    assert plan["route"] == "plan" and "Slow-Wave" in plan["reply"] and "sample" not in plan["payload"]
+    quiz = handle_message("r_1", "اختبرني", user_id="u_1")
+    assert quiz["route"] == "quiz" and quiz["payload"] == {"topic_id": "topic_02"}
+    assert calls == [("r_1", "u_1"), ("r_1", "u_1")]
+    assert_reply_schema(plan) or assert_reply_schema(quiz)
+
+
+def test_no_student_profile_means_unavailable_not_a_sample():
+    clients.connect("next_step", lambda room_id, user_id: None)
+    out = handle_message("r_1", "اختبرني")
+    assert out["payload"] == {"unavailable": True}
+
+
+NOT_COVERED = {"answer": "This topic is not covered in the provided course material.", "citations": [],
+               "grounded": False, "steps": []}
+
+
+def test_a_lesson_level_question_gets_an_explanation_of_the_latest_file():
+    events, asked = [], []
+    clients.connect("tutor_answer", lambda room_id, q: NOT_COVERED)
+    clients.connect("overview", lambda room_id, q: asked.append(q) or {
+        "answer": "الدرس عن أنبوب الموجة المتنقلة (p. 3).", "grounded": True, "steps": [],
+        "citations": [{"file_name": "twt.pdf", "page": 3}]})
+    clients.connect("topic_of", lambda room_id, citations: "topic_02" if citations else None)
+    clients.connect("record_event", events.append)
+    out = handle_message("r_1", "اشرح لي فكرة الدرس الأخير ببساطة", user_id="u_1")
+    assert out["route"] == "ask" and out["payload"]["grounded"] is True
+    assert out["reply"].startswith("الدرس عن") and out["payload"]["citations"][0]["page"] == 3
+    assert asked and events[0]["topic_id"] == "topic_02"
+    assert_reply_schema(out)
+
+
+def test_a_specific_question_that_is_not_covered_stays_not_covered_without_the_english_text():
+    clients.connect("tutor_answer", lambda room_id, q: NOT_COVERED)
+    clients.connect("overview", lambda room_id, q: (_ for _ in ()).throw(AssertionError("not a lesson request")))
+    out = handle_message("r_1", "ما هي سرعة الضوء في الفراغ؟", user_id="u_1")
+    assert out["payload"]["grounded"] is False and out["reply"] == ""

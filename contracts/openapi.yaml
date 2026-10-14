@@ -106,6 +106,19 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UploadFile" }
+  /rooms/{room_id}/files/{file_id}:
+    delete:
+      tags: [M1 platform]
+      operationId: deleteRoomFile
+      summary: Delete a file from a room (the room's teacher only). M1 removes the stored file, then asks M2 to drop it from the search index.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+        - { name: file_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted. No body. }
+        "401": { description: Not logged in }
+        "403": { description: Only the room's teacher can delete its files }
+        "404": { description: Unknown room or file }
   /auth/register:
     post:
       tags: [M1 platform]
@@ -515,6 +528,94 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ClassReport" }
+
+  /teacher/rooms/{room_id}/students/{user_id}/parent-report:
+    get:
+      tags: [M5 teacher]
+      operationId: parentReport
+      summary: A student's weekly report for their parents (the room's teacher only), with a share link token.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+        - { name: user_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The report, plus share_token for a link that opens it without an account (14 days).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ParentReport" }
+        "401": { description: Not logged in }
+        "403": { description: Not this room's teacher }
+        "404": { description: Unknown room or student }
+
+  /parent-report/{token}:
+    get:
+      tags: [M5 teacher]
+      operationId: sharedParentReport
+      summary: The report behind a share link. No account needed; the signed token names the room and student.
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The report (without share_token)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ParentReport" }
+        "404": { description: Invalid or expired link }
+
+  /rooms/{room_id}/inbox:
+    get:
+      tags: [M5 teacher]
+      operationId: roomInbox
+      summary: Questions the tutor could not answer. The room's teacher sees all; a student sees only their own, with the teacher's answers.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+      responses:
+        "200":
+          description: Open questions first, newest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InboxQuestions" }
+        "401": { description: Not logged in }
+        "403": { description: Not a member of this room }
+
+  /rooms/{room_id}/inbox/{question_id}/answer:
+    post:
+      tags: [M5 teacher]
+      operationId: answerInboxQuestion
+      summary: The teacher answers. The answer is shown to the student and reused when the same question is asked again.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+        - { name: question_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InboxAnswerRequest" }
+      responses:
+        "200":
+          description: The answered question
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InboxQuestion" }
+        "403": { description: Only the room's teacher }
+        "404": { description: Unknown question }
+
+  /rooms/{room_id}/inbox/{question_id}/draft:
+    post:
+      tags: [M5 teacher]
+      operationId: draftInboxAnswer
+      summary: An AI draft of the reply, from the room's material when it has something related. The teacher edits it before answering.
+      parameters:
+        - { $ref: "#/components/parameters/RoomId" }
+        - { name: question_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TeacherAssistant" }
+        "503": { description: No model configured }
 
   /teacher/assistant:
     post:
@@ -1801,6 +1902,46 @@ components:
           type: array
           items: { type: string }
 
+    ParentReport:
+      type: object
+      additionalProperties: false
+      required: [room_id, room_name, user_id, student_name, period, quizzes_taken, questions_answered,
+                 average_score, questions_asked, asked_about, topics, strengths, needs_work, improved, summary]
+      properties:
+        room_id: { type: string }
+        room_name: { type: string }
+        user_id: { type: string }
+        student_name: { type: string }
+        period:
+          type: object
+          additionalProperties: false
+          required: [from, to]
+          properties:
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+        quizzes_taken: { type: integer, minimum: 0 }
+        questions_answered: { type: integer, minimum: 0 }
+        average_score: { type: [number, "null"], minimum: 0, maximum: 1, description: "null when no quiz this week" }
+        questions_asked: { type: integer, minimum: 0 }
+        asked_about: { type: array, items: { type: string }, description: "topic names, most asked first" }
+        topics:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [topic_id, name, mastery, status, change]
+            properties:
+              topic_id: { type: string }
+              name: { type: string }
+              mastery: { type: number, minimum: 0, maximum: 1 }
+              status: { type: string, enum: [on_track, watch, struggling] }
+              change: { type: [number, "null"], description: "mastery now minus before this week; null if new" }
+        strengths: { type: array, items: { type: string } }
+        needs_work: { type: array, items: { type: string } }
+        improved: { type: array, items: { type: string } }
+        summary: { type: array, items: { type: string }, description: "Arabic sentences for parents, written from the numbers above" }
+        share_token: { type: string, description: "Only in the teacher's response" }
+
     ClassReport:
       type: object
       additionalProperties: false
@@ -1812,6 +1953,36 @@ components:
         students_at_risk:
           type: array
           items: { $ref: "#/components/schemas/StudentAtRisk" }
+
+    InboxQuestion:
+      type: object
+      additionalProperties: false
+      required: [question_id, user_id, student_name, text, time, status, answer, answered_at]
+      properties:
+        question_id: { type: string }
+        user_id: { type: [string, "null"] }
+        student_name: { type: string }
+        text: { type: string }
+        time: { type: string, format: date-time }
+        status: { type: string, enum: [open, answered] }
+        answer: { type: string, description: "empty while open" }
+        answered_at: { type: [string, "null"], format: date-time }
+
+    InboxQuestions:
+      type: object
+      additionalProperties: false
+      required: [questions]
+      properties:
+        questions:
+          type: array
+          items: { $ref: "#/components/schemas/InboxQuestion" }
+
+    InboxAnswerRequest:
+      type: object
+      additionalProperties: false
+      required: [answer]
+      properties:
+        answer: { type: string, minLength: 1, maxLength: 4000 }
 
     TeacherAssistantRequest:
       type: object
